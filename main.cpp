@@ -1,4 +1,6 @@
 
+#include <assert.h>
+
 #include <iostream>
 #include <chrono>
 #include <vector>
@@ -129,7 +131,7 @@ const char* mio_err[] = {
 
 struct mio {
 private:
-    static miopenhandle_t get_handle() {
+    static miopenHandle_t get_handle() {
         miopenHandle_t h;
         CHECK_MIO(miopenCreate(&h));
         return h;
@@ -330,10 +332,17 @@ struct Layer {
     }
 };
 
+static Dim getConvOutputDim(int padding, int stride, const TensorDesc& input, const TensorDesc& weights) {
+    int n, c, h, w;
+    ConvDesc d(padding, padding, stride, stride, 1, 1);
+    CHECK_MIO(miopenGetConvolutionForwardOutputDim(d.desc, input.desc, weights.desc, &n, &c, &h, &w));
+    return Dim(n, c, h, w);
+}
+
 struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     Tensor weights;
     Tensor dweights;
-    Tensor* input_ref;
+    const Tensor* input_ref;
 
     DevBuffer buffer; // TODO: joined buffer for fwd/bwd
 
@@ -342,6 +351,12 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     miopenConvBwdWeightsAlgorithm_t bwd_weights_algo;
     miopenConvBwdDataAlgorithm_t bwd_data_algo;
 
+
+:
+:redraw!
+q
+:
+:w
     static Dim getOutputDim(const ConvDesc& convdesc, const TensorDesc& input, const TensorDesc& weights) {
         int n, c, h, w;
         CHECK_MIO(miopenGetConvolutionForwardOutputDim(convdesc.desc, input.desc, weights.desc, &n, &c, &h, &w));
@@ -351,11 +366,23 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     ConvLayer(const TensorDesc& input_dims, int channels_out, int kernel_size, int padding, int stride)
         : ConvDesc(padding, padding, stride, stride, 1, 1),
           ConvLayerDesc({input_dims.n, input_dims.h, input_dims.w, input_dims.c, channels_out, kernel_size}),
-          Layer((Dim&)input_dims, getOutputDim(*this, input_dims, weights)),
+          Layer((Dim&)input_dims, getConvOutputDim(padding, stride, input_dims, TensorDesc(channels_out, input_dims.c, kernel_size, kernel_size))),
           weights(channels_out, input_dims.c, kernel_size, kernel_size),
           dweights(channels_out, input_dims.c, kernel_size, kernel_size)
     {
     }
+
+    /* default stride = 1 */
+    ConvLayer(const TensorDesc& input_dims, int channels_out, int kernel_size, int padding)
+        : ConvLayer(input_dims, channels_out, kernel_size, padding, 1) {}
+
+    /* default padding = 0, stride = 1 */
+    ConvLayer(const TensorDesc& input_dims, int channels_out, int kernel_size)
+        : ConvLayer(input_dims, channels_out, kernel_size, 0, 1) {}
+
+    /* default padding = 0, stride = 1 */
+    ConvLayer(const ConvLayerDesc& l)
+        : ConvLayer(TensorDesc(l.batch_size, l.channels_in, l.height, l.width), l.channels_out, l.kernel_size) {}
 
     /*
     ConvLayer(int batch_size, int height, int width, int channels_in, int channels_out, int conv_size)
@@ -384,11 +411,9 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         return batch_size * 1.0 * height * width * channels_in * channels_out * kernel_size * kernel_size;
     }
 
-    void init_forward(miopenHandle_t mio_handle) {
+    void init_forward(const Tensor& input, Tensor& output) {
         size_t workspace_size;
-        CHECK_MIO(miopenConvolutionForwardGetWorkSpaceSize(mio_handle, weights.desc, input.desc, this->desc, output.desc, &workspace_size));
-
-        check_output_size();
+        CHECK_MIO(miopenConvolutionForwardGetWorkSpaceSize(mio::handle(), weights.desc, input.desc, this->desc, output.desc, &workspace_size));
 
         std::cout << "\tWorkspace size required for fwd: " << workspace_size << std::endl;
         if (workspace_size > buffer.size) {
@@ -399,7 +424,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         // find best algo, and benchmark!
         miopenConvAlgoPerf_t perfs[4];
         int returned_algos;
-        CHECK_MIO(miopenFindConvolutionForwardAlgorithm(mio_handle, input.desc, input.data, weights.desc, weights.data, this->desc, output.desc, output.data, 4, &returned_algos, perfs, buffer.data, buffer.size, false));
+        CHECK_MIO(miopenFindConvolutionForwardAlgorithm(mio::handle(), input.desc, input.data, weights.desc, weights.data, this->desc, output.desc, output.data, 4, &returned_algos, perfs, buffer.data, buffer.size, false));
 
         std::cout << "\tMIOpen Found " << returned_algos << " fwd algorithms, choosing " << perfs[0].fwd_algo << ": " << std::endl;
         for (int i = 0; i < returned_algos; ++i) {
@@ -410,9 +435,9 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         //fwd_algo = miopenConvolutionFwdAlgoDirect;
     }
 
-    void find_bwd_data_algo(miopenHandle_t mio_handle) {
+    void find_bwd_data_algo(const Tensor& doutput, Tensor& dinput) {
         size_t workspace_size;
-        CHECK_MIO(miopenConvolutionBackwardDataGetWorkSpaceSize(mio_handle, output.desc, weights.desc, this->desc, input.desc, &workspace_size));
+        CHECK_MIO(miopenConvolutionBackwardDataGetWorkSpaceSize(mio::handle(), doutput.desc, weights.desc, this->desc, dinput.desc, &workspace_size));
 
         std::cout << "\tWorkspace size required for bwd_data: " << workspace_size << std::endl;
         if (workspace_size > buffer.size) {
@@ -423,7 +448,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         // find best algo, and benchmark!
         miopenConvAlgoPerf_t perfs[5];
         int returned_algos;
-        CHECK_MIO(miopenFindConvolutionBackwardDataAlgorithm(mio_handle, output.desc, output.data, weights.desc, weights.data, this->desc, input.desc, input.data, 5, &returned_algos, perfs, buffer.data, buffer.size, false));
+        CHECK_MIO(miopenFindConvolutionBackwardDataAlgorithm(mio::handle(), doutput.desc, doutput.data, weights.desc, weights.data, this->desc, dinput.desc, dinput.data, 5, &returned_algos, perfs, buffer.data, buffer.size, false));
 
         std::cout << "\tMIOpen Found " << returned_algos << " bwd_data algorithms, choosing " << perfs[0].fwd_algo << ": " << std::endl;
         for (int i = 0; i < returned_algos; ++i) {
@@ -434,9 +459,9 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         //bwd_data_algo = miopenConvolutionBwdDataAlgoDirect;
     }
 
-    void find_bwd_weights_algo(miopenHandle_t mio_handle) {
+    void find_bwd_weights_algo(const Tensor& doutput, Tensor& input) {
         size_t workspace_size;
-        CHECK_MIO(miopenConvolutionBackwardWeightsGetWorkSpaceSize(mio_handle, output.desc, input.desc, this->desc, weights.desc, &workspace_size));
+        CHECK_MIO(miopenConvolutionBackwardWeightsGetWorkSpaceSize(mio::handle(), doutput.desc, input.desc, this->desc, weights.desc, &workspace_size));
 
         std::cout << "\tWorkspace size required for bwd_weights: " << workspace_size << std::endl;
         if (workspace_size > buffer.size) {
@@ -447,7 +472,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         // find best algo, and benchmark!
         miopenConvAlgoPerf_t perfs[5];
         int returned_algos;
-        CHECK_MIO(miopenFindConvolutionBackwardWeightsAlgorithm(mio_handle, output.desc, output.data, input.desc, input.data, this->desc, weights.desc, weights.data, 5, &returned_algos, perfs, buffer.data, buffer.size, false));
+        CHECK_MIO(miopenFindConvolutionBackwardWeightsAlgorithm(mio::handle(), doutput.desc, doutput.data, input.desc, input.data, this->desc, dweights.desc, dweights.data, 5, &returned_algos, perfs, buffer.data, buffer.size, false));
 
         std::cout << "\tMIOpen Found " << returned_algos << " bwd_weights algorithms, choosing " << perfs[0].fwd_algo << ": " << std::endl;
         for (int i = 0; i < returned_algos; ++i) {
@@ -458,10 +483,16 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         //bwd_weights_algo = miopenConvolutionBwdWeightsAlgoDirect;
     }
 
+    /*
     void init(miopenHandle_t mio_handle) {
         init_fwd_algo(mio_handle);
         //find_bwd_data_algo(mio_handle);
         //find_bwd_weights_algo(mio_handle);
+    }
+    */
+    void init_backward(const Tensor& doutput, Tensor& dinput) {
+        find_bwd_data_algo(doutput, dinput);
+        find_bwd_weights_algo(doutput, dinput);
     }
 
     void forward(const Tensor& input, Tensor& output) {
@@ -477,9 +508,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         float alpha = 1.f;
         float beta = 0.f;
         CHECK_MIO(miopenConvolutionBackwardData(mio::handle(), &alpha, doutput.desc, doutput.data, weights.desc, weights.data, this->desc, bwd_data_algo, &beta, dinput.desc, dinput.data, buffer.data, buffer.size));
-        float alpha = 1.f;
-        float beta = 0.f;
-        CHECK_MIO(miopenConvolutionBackwardWeights(mio::handle(), &alpha, doutput.desc, doutput.data, input_ref->desc, input_ref->data, this->desc, bwd_weights_algo, &beta, weights.desc, weights.data, buffer.data, buffer.size));
+        CHECK_MIO(miopenConvolutionBackwardWeights(mio::handle(), &alpha, doutput.desc, doutput.data, input_ref->desc, input_ref->data, this->desc, bwd_weights_algo, &beta, dweights.desc, dweights.data, buffer.data, buffer.size));
     }
 };
 
@@ -490,21 +519,21 @@ struct MaxPool : public Layer {
     // needed for backward: original input, original output, indeces (as workspace)
     DevBuffer indeces_buf;
 
-    Tensor* input;
-    Tensor* output;
+    const Tensor* input;
+    const Tensor* output;
 
     static Dim getOutputDim(const TensorDesc& input, int kernel_size, int padding, int stride) {
         int n, c, h, w;
 
         miopenPoolingDescriptor_t pool_desc;
-        CHECK_MIO(miopenSet2dPoolingDescriptor(&pool_desc, miopenPoolingMax, kernel_size, kernel_size, padding, padding, stride, stride));
+        CHECK_MIO(miopenSet2dPoolingDescriptor(pool_desc, miopenPoolingMax, kernel_size, kernel_size, padding, padding, stride, stride));
         CHECK_MIO(miopenGetPoolingForwardOutputDim(pool_desc, input.desc, &n, &c, &h, &w));
         CHECK_MIO(miopenDestroyPoolingDescriptor(pool_desc));
         return Dim(n, c, h, w);
     }
 
-    MaxPool(const TensorDesc& input_dim, int kernel_size, int padding, int stride) : Layer(input_dim, getOutputDim(input_dim, kernel_size, padding, stride)) {
-        CHECK_MIO(miopenSet2dPoolingDescriptor(&desc, miopenPoolingMax, kernel_size, kernel_size, padding, padding, stride, stride));
+    MaxPool(const TensorDesc& input_dim, int kernel_size, int padding, int stride) : Layer((Dim&)input_dim, getOutputDim(input_dim, kernel_size, padding, stride)) {
+        CHECK_MIO(miopenSet2dPoolingDescriptor(desc, miopenPoolingMax, kernel_size, kernel_size, padding, padding, stride, stride));
     }
 
     ~MaxPool() {
@@ -536,14 +565,18 @@ struct MaxPool : public Layer {
 struct ReLU : public Layer {
     miopenActivationDescriptor_t desc;
 
-    Tensor* input;
-    Tensor* output;
+    const Tensor* input;
+    const Tensor* output;
 
+    /*
     ReLU() : Layer() {
         CHECK_MIO(miopenSetActivationDescriptor(desc, miopenActivationRELU, 0.0, 0.0, 0.0));
     }
+    */
 
-    ReLU(const TensorDesc& input_dim) : Layer(input_dim, output_dim), ReLU() {}
+    ReLU(const TensorDesc& input_dim) : Layer(input_dim, input_dim) {
+        CHECK_MIO(miopenSetActivationDescriptor(desc, miopenActivationRELU, 0.0, 0.0, 0.0));
+    }
 
 
     ~ReLU() {
@@ -572,7 +605,7 @@ void mm(const Tensor& A, bool transA, const Tensor& B, bool transB, Tensor& C) {
     assert(C.h == 1 && C.w == 1);
     int M = transA ? A.c : A.n;
     int K = transA ? A.n : A.c;
-    assert(transB ? k == B.c : k == B.n);
+    assert(transB ? K == B.c : K == B.n);
     int N = transB ? B.n : B.c;
     assert(C.n == M && C.c == N); // result is MxN
     float alpha = 1.f;
@@ -593,7 +626,7 @@ struct Linear {
     Tensor weights; // dim (out_channels, in_channels, 1, 1)
     Tensor dweights;
 
-    Tensor* input_ref;
+    const Tensor* input_ref;
 
     Linear(int batch_size, int in_size, int out_size)
         : batch_size(batch_size), in_size(in_size), out_size(out_size),
@@ -646,6 +679,7 @@ int getClock() {
     return 0;
 }
 
+#if 0
 void alex() {
     Dim input_dim(batch_size, 3, x, y);
     /* convolutions: input_dims, output_channels, kernel_size, padding, stride */
@@ -656,6 +690,7 @@ void alex() {
     MaxPool max1();
     ConvLayer c2(prev.output_dims(), 64, 192, 5, 2, 0);
 }
+#endif
 
 
 int main(int argc, char *argv[])
@@ -667,7 +702,7 @@ int main(int argc, char *argv[])
 
     // batch_size, w, h, channels_in, channels_out, filter_size (eg, 3 for 3x3)
     /*
-    std::vector<LayerDesc> runs = {{128, 13, 13, 384, 384, 3},
+    std::vector<ConvLayerDesc> runs = {{128, 13, 13, 384, 384, 3},
                                    {128, 16, 16, 128, 128, 7},
                                    {128, 32, 32, 128, 128, 9},
                                    {128, 64, 64, 64, 128, 9},
@@ -675,7 +710,7 @@ int main(int argc, char *argv[])
                                    */
 
 
-    std::vector<LayerDesc> runs = {{128, 64, 64, 64, 128, 3}};
+    std::vector<ConvLayerDesc> runs = {{128, 64, 64, 64, 128, 3}};
                                    //{64, 32, 32, 18, 18, 3}};
                                    //{64, 32, 32, 16, 16, 5}};
 
@@ -683,14 +718,20 @@ int main(int argc, char *argv[])
     int layer = 5;
     int reps = 30;
     //LayerDesc& l = runs[3];
-    for (LayerDesc& l : runs) {
+    for (ConvLayerDesc& l : runs) {
 
-        TensorDesc input(128, 64, 64, 64);
-        ConvLayer conv(input, 128, 3, 0, 1);
+        TensorDesc input_dim(128, 64, 64, 64);
+        ConvLayer conv(input_dim, 128, 3, 0, 1);
+
+        Tensor input(input_dim);
+        Tensor output(conv.getOutputDesc());
+
+
         std::ofstream of("benchmark.log");
         of << "Time\tTemp\tFan\tClock" << std::endl;
         of << 0 << "\t" << getTemp() << "\t" << getFanspeed() << "\t" << getClock() << std::endl;
-        conv.init(mio_handle);
+        conv.init_forward(input, output);
+        //conv.init_backward(output, input);
         of << 0 << "\t" << getTemp() << "\t" << getFanspeed() << "\t" << getClock() << std::endl;
 
 
@@ -699,7 +740,7 @@ int main(int argc, char *argv[])
             auto tic = std::chrono::steady_clock::now();
             std::vector<float> conv_times(reps);
             for (int i = 0; i < reps; ++i) {
-                conv.forward(mio_handle);
+                conv.forward(input, output);
                 int clk = getClock();
                 int fan = getFanspeed();
                 float temp = getTemp();
@@ -748,6 +789,6 @@ int main(int argc, char *argv[])
     }
 
 
-    miopenDestroy(mio_handle);
+    miopenDestroy(mio::handle());
     return 0;
 }
