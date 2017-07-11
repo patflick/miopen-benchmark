@@ -2,7 +2,7 @@ ROCM_PATH?= $(wildcard /opt/rocm)
 HIP_PATH?= $(wildcard /opt/rocm/hip)
 HIPCC=$(HIP_PATH)/bin/hipcc
 INCLUDE_DIRS=-I$(HIP_PATH)/include -I$(ROCM_PATH)/include
-LD_FLAGS=-L$(ROCM_PATH)/lib -L$(ROCM_PATH)/opencl/lib/x86_64 -lMIOpen -lOpenCL
+LD_FLAGS=-L$(ROCM_PATH)/lib -L$(ROCM_PATH)/opencl/lib/x86_64 -lMIOpen -lOpenCL -lhipblas-hcc -lrocblas-hcc -lprofiler
 TARGET=--amdgpu-target=gfx900
 
 HIPCC_FLAGS=-g $(CXXFLAGS) $(TARGET) $(INCLUDE_DIRS)
