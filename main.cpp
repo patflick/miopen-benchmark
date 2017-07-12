@@ -9,6 +9,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <algorithm>
 
 
 #include <miopen/miopen.h>
@@ -301,33 +302,57 @@ struct Tensor : public TensorDesc {
         return *this;
     }
 
-    Tensor(TensorDesc&& d) : TensorDesc(std::move(d)), owns_data(true) {
-        data_size = n;
-        data_size *= c; data_size *= h; data_size *= w; data_size *= 4;
+    std::vector<float> toHost() {
+        std::vector<float> x(data_size/sizeof(float));
+        hipMemcpyDtoH(&x[0], data, data_size);
+        return x;
+    }
+
+    void fromHost(const std::vector<float>& h) {
+        hipMemcpyHtoD(data,(void*) h.data(), data_size);
+        hipDeviceSynchronize();
+    }
+
+    void alloc() {
         DEBUG("Allocating Float Tensor (" << n << "," << c << "," << h << "," << h << "), total size: " << data_size / 1024 << " kB");
         data = device_alloc(data_size);
     }
 
-    Tensor(const Dim& dims) : TensorDesc(dims), owns_data(true) {
-        data_size = n;
-        data_size *= c; data_size *= h; data_size *= w; data_size *= 4;
-        DEBUG("Allocating Float Tensor (" << n << "," << c << "," << h << "," << h << "), total size: " << data_size / 1024 << " kB");
-        data = device_alloc(data_size);
+    // randomly initiate tensor via copying from host
+    void uniform() {
+        std::vector<float> h(data_size/sizeof(float));
+        std::generate(h.begin(), h.end(), [](){return rand()*1.f/RAND_MAX;});
+        hipMemcpyHtoD(data, h.data(), data_size);
     }
 
-    Tensor(int n, int c, int h, int w) : TensorDesc(n, c, h, w), owns_data(true) {
-        data_size = n;
-        data_size *= c; data_size *= h; data_size *= w; data_size *= 4;
-        DEBUG("Allocating Float Tensor (" << n << "," << c << "," << h << "," << h << "), total size: " << data_size / 1024 << " kB");
-        data = device_alloc(data_size);
+
+    Tensor(TensorDesc&& d)
+        : TensorDesc(std::move(d)),
+          owns_data(true),
+          data_size(n*(size_t)c*h*w*sizeof(float)) {
+        alloc();
     }
 
-    Tensor(int n, int c, int h, int w, bool alloc) : TensorDesc(n, c, h, w), owns_data(alloc) {
-        data_size = n;
-        data_size *= c; data_size *= h; data_size *= w; data_size *= 4;
-        if (alloc) {
-            DEBUG("Allocating Float Tensor (" << n << "," << c << "," << h << "," << h << "), total size: " << data_size / 1024 << " kB");
-            data = device_alloc(data_size);
+    Tensor(const Dim& dims)
+        : TensorDesc(dims),
+          owns_data(true),
+          data_size(n*(size_t)c*h*w*sizeof(float)) {
+        alloc();
+    }
+
+    Tensor(int n, int c, int h, int w)
+        : TensorDesc(n, c, h, w),
+          owns_data(true),
+          data_size(n*(size_t)c*h*w*sizeof(float)) {
+        alloc();
+    }
+
+    Tensor(int n, int c, int h, int w, bool do_alloc)
+        : TensorDesc(n, c, h, w),
+          owns_data(do_alloc),
+          data_size(n*(size_t)c*h*w*sizeof(float)) {
+        if (do_alloc) {
+            alloc();
         }
     }
 
@@ -682,8 +707,10 @@ void mm(const Tensor& A, bool transA, const Tensor& B, bool transB, Tensor& C) {
     float alpha = 1.f;
     float beta = 0.f;
     // TODO: leading dimension lda, ldb, ldc?
-    int lda = transA ? M : K;
-    int ldb = transB ? K : N;
+    //int lda = transA ? M : K;
+    int lda = A.c;
+    //int ldb = transB ? K : N;
+    int ldb = B.c;
     int ldc = N;
     assert(A.data_size == M*K*4);
     assert(B.data_size == K*N*4);
@@ -704,22 +731,16 @@ void mm_blas(const Tensor& A, bool transA, const Tensor& B, bool transB, Tensor&
 
     float alpha = 1.f;
     float beta = 0.f;
-    //int lda = A.c; //;  transA ? M : K;
-    //int ldb = B.c; // transB ? K : N;
-    int lda = A.n;
-    int ldb = B.n;
-    //int lda = K;
-    //int ldb = N;
-    int ldc = N; // == C.c
+    int lda = A.c;
+    int ldb = B.c;
+    int ldc = C.c;
     hipblasHandle_t blas_handle;
     hipblasCreate(&blas_handle);
-    // TODO: rowmaj to colmaj
-    hipblasOperation_t opA = transA ? HIPBLAS_OP_N : HIPBLAS_OP_T;
-    hipblasOperation_t opB = transB ? HIPBLAS_OP_N : HIPBLAS_OP_T;
-    //hipblasStatus_t err = hipblasSgemm(blas_handle, opA, opB, M, N, K, &alpha, (const float*)A.data, lda, (const float*)B.data, ldb, &beta, (float*)C.data, ldc);
-    // op(A) : (M x K)
-    // op(B) : (K x N)
+    hipblasOperation_t opA = transA ? HIPBLAS_OP_T : HIPBLAS_OP_N;
+    hipblasOperation_t opB = transB ? HIPBLAS_OP_T : HIPBLAS_OP_N;
+    // call Sgemm with A<->B swapped (since we have rowmaj, but blas expects colmajor)
     hipblasStatus_t err = hipblasSgemm(blas_handle, opB, opA, N, M, K, &alpha, (const float*)B.data, ldb, (const float*)A.data, lda, &beta, (float*)C.data, ldc);
+    assert(err == 0);
 }
 
 // (batch_size * size) -> (batch_size * size)
@@ -758,8 +779,6 @@ struct Linear : public Layer {
 
     void backward(const Tensor& doutput, Tensor& dinput) {
         // two MMs
-        //mm(doutput, false, weights, false, dinput); // dI <- dO * W
-        //mm(doutput, true, input_ref->viewAs(batch_size, in_size, 1, 1), false, dweights); // dW <- dO^T * I
         mm_blas(doutput, true, *input_ref, false, dweights); // dW <- dO^T * I
         mm_blas(doutput, false, weights, false, dinput); // dI <- dO * W
     }
@@ -860,17 +879,43 @@ struct Model {
 
     void reshape(int n, int c, int h, int w) {
         layers.emplace_back(new Reshape(last_output_dim(), n, c, h, w));
-        out_tensors.emplace_back(new Tensor(n, c, h, w, false)); /* gets set in forward() */
+        out_tensors.emplace_back(new Tensor(n, c, h, w, false)); /* Tensor data gets set in forward() */
     }
 
-    void init_forward() {
+    // for each layer, calls f(Layer& l, Tensor& in, Tensor& out);
+    template <typename Func>
+    void forward_pass(Func f) {
         Tensor* in = &input;
         Tensor* out;
+
         for (size_t i = 0; i < layers.size(); ++i) {
             out = out_tensors[i].get();
-            layers[i]->init_forward(*in, *out);
+            f(*layers[i], *in, *out);
             in = out;
         }
+    }
+
+    // for each layer backwards, calls b(Layer& l, Tensor& dout, Tensor& din)
+    template <typename Func>
+    void backward_pass(Func b) {
+        assert(out_tensors.size() > 0);
+        Tensor* dout = out_tensors.back().get();
+        Tensor* din;
+        for (size_t i = 0; i < layers.size(); ++i) {
+            if (i < layers.size()-1) {
+                din = out_tensors[out_tensors.size()-i-2].get();
+            } else {
+                din = &input;
+            }
+            b(*layers[out_tensors.size()-i-1], *dout, *din);
+            dout = din;
+        }
+    }
+
+
+    // initializes all layers for fwd
+    void init_forward() {
+        forward_pass([](Layer& l, Tensor& in, Tensor& out){l.init_forward(in, out);});
         is_init_fwd = true;
     }
 
@@ -878,63 +923,31 @@ struct Model {
         if (!is_init_fwd) {
             init_forward();
         }
-        Tensor* in = &input;
-        Tensor* out;
-
-        for (size_t i = 0; i < layers.size(); ++i) {
+        forward_pass([](Layer& l, Tensor& in, Tensor& out){
             std::stringstream ss;
-            ss << "Fwd " << *layers[i];
+            ss << "Fwd " << l;
             timed_section s(ss.str());
-            out = out_tensors[i].get();
-            layers[i]->forward(*in, *out);
-
-            /* timing */
-            /*
-            float kernel_time;
-            CHECK_MIO(miopenGetKernelTime(mio::handle(), &kernel_time));
-            INFO(*layers[i] << "\t time: " << kernel_time << " ms");
-            */
-
-            in = out;
-
+            l.forward(in, out);
             CHECK_HIP(hipDeviceSynchronize());
-        }
-        //return *out;
+        });
     }
 
     void init_backward() {
-        assert(out_tensors.size() > 0);
-        Tensor* dout = out_tensors.back().get();
-        Tensor* din;
-        for (size_t i = 0; i < layers.size(); ++i) {
-            if (i < layers.size()-1) {
-                din = out_tensors[out_tensors.size()-i-2].get();
-            } else {
-                din = &input;
-            }
-            layers[out_tensors.size()-i-1]->init_backward(*dout, *din);
-            dout = din;
-            CHECK_HIP(hipDeviceSynchronize());
-        }
+        backward_pass([](Layer& l, Tensor& dout, Tensor& din){l.init_backward(dout, din);});
+        is_init_bwd = true;
     }
 
     void backward() {
-        assert(out_tensors.size() > 0);
-        Tensor* dout = out_tensors.back().get();
-        Tensor* din;
-        for (size_t i = 0; i < layers.size(); ++i) {
-            if (i < layers.size()-1) {
-                din = out_tensors[out_tensors.size()-i-2].get();
-            } else {
-                din = &input;
-            }
-            std::stringstream ss;
-            ss << "Bwd " << *layers[out_tensors.size()-i-1];
-            timed_section s(ss.str());
-            layers[out_tensors.size()-i-1]->backward(*dout, *din);
-            CHECK_HIP(hipDeviceSynchronize());
-            dout = din;
+        if (!is_init_bwd) {
+            init_backward();
         }
+        backward_pass([](Layer& l, Tensor& dout, Tensor& din) {
+            std::stringstream ss;
+            ss << "Bwd " << l;
+            timed_section s(ss.str());
+            l.backward(dout, din);
+            CHECK_HIP(hipDeviceSynchronize());
+        });
     }
 };
 
@@ -942,22 +955,22 @@ struct Model {
 
 void benchmark_convlayers() {
     // batch_size, w, h, channels_in, channels_out, kernel_size, padding, stride
-    /*
     std::vector<ConvLayerDesc> runs = {{128, 13, 13, 384, 384, 3, 0, 1},
                                    {128, 16, 16, 128, 128, 7, 0, 1},
                                    {128, 32, 32, 128, 128, 9, 0, 1},
                                    {128, 64, 64, 64, 128, 9, 0, 1},
                                    {128, 128, 128, 3, 96, 11, 0, 1}};
-                                   */
 
 
+    /*
     std::vector<ConvLayerDesc> runs = {{128, 64, 64, 64, 128, 3, 0, 1},
                                        {128, 64, 64, 64, 128, 3, 1, 1},
                                        {128, 28, 28, 64, 64, 5, 1, 2}};
+                                       */
 
 
     int layer = 5;
-    int reps = 30;
+    int reps = 10;
     //LayerDesc& l = runs[3];
     for (ConvLayerDesc& l : runs) {
 
@@ -991,14 +1004,7 @@ void benchmark_convlayers() {
             CHECK_HIP(hipDeviceSynchronize());
             auto toc = std::chrono::steady_clock::now();
             double time = std::chrono::duration_cast<std::chrono::milliseconds>(toc - tic).count()*1.0/reps;
-            double mflop = conv.num_flops() / 1024.0 / 1024.0;
-            std::cout << "theo mflop: " << mflop << std::endl;
-            std::cout << "Time for FWD L" << layer << ": " << time << " ms, " << mflop/time << " GFlops" << std::endl;
-            //std::cout << "    Time per launch: ";
-            //for (int i = 0; i < reps; ++i) {
-            //    std::cout << conv_times[i] << ", ";
-            //}
-            //std::cout << std::endl;
+            std::cout << "Time for FWD L" << layer << ": " << time << " ms" << std::endl;
         }
         /*
         {
@@ -1038,13 +1044,7 @@ void benchmark_convlayers() {
  * - [ ] Create runner and benchmarker class
  */
 
-int main(int argc, char *argv[])
-{
-    device_init();
-
-    // enable profiling
-    CHECK_MIO(miopenEnableProfiling(mio::handle(), true));
-
+void alexNet() {
     int reps = 10;
     TensorDesc input_dim(128, 3, 224, 224);
 
@@ -1064,6 +1064,8 @@ int main(int argc, char *argv[])
     m.addReLU();
     m.addMaxPool(3, 0, 2);
 
+    DEBUG("DIms after Features; " << m.last_output_dim());
+
     /* classifier */
     // TODO Dropout
     m.reshape(128, 256 * 6 * 6, 1, 1);
@@ -1074,12 +1076,12 @@ int main(int argc, char *argv[])
     m.addReLU();
     m.addLinear(1000);
 
-    INFO("Init fwd+bwd");
+    INFO("Init fwd");
     m.init_forward();
+    INFO("Init bwd");
     m.init_backward();
 
-    //ProfilerStart("first_iter.log");
-    INFO("Begin dry run");
+    INFO("Begin warmup runs");
     for (int i = 0; i < 3; ++i) {
         {
             INFO("               ======= BEGIN FWD =======");
@@ -1093,16 +1095,18 @@ int main(int argc, char *argv[])
             m.backward();
             CHECK_HIP(hipDeviceSynchronize());
         }
-    //ProfilerStop();
     }
 
     INFO("Begin Timings");
+    std::chrono::steady_clock::duration fwdtime;
     auto tic = std::chrono::steady_clock::now();
     for (int i = 0; i < reps; ++i) {
         {
             INFO("               ======= BEGIN FWD =======");
             timed_section s("Fwd Pass");
+            //auto tic = std::chrono::steady_clock::now();
             m.forward();
+            //auto toc = 
         }
         {
             INFO("               ======= BEGIN BWD =======");
@@ -1112,8 +1116,18 @@ int main(int argc, char *argv[])
     }
     auto toc = std::chrono::steady_clock::now();
     double time = std::chrono::duration_cast<std::chrono::milliseconds>(toc - tic).count()*1.0/reps;
-    INFO("Time per fwd pass: " << time << " ms");
+    INFO("Avg time per fwd+bwd: " << time << " ms");
+}
 
+int main(int argc, char *argv[])
+{
+    device_init();
+
+    // enable profiling
+    CHECK_MIO(miopenEnableProfiling(mio::handle(), true));
+
+    alexNet();
+    //benchmark_convlayers();
 
     miopenDestroy(mio::handle());
     return 0;
