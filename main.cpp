@@ -414,8 +414,38 @@ struct ConvLayerDesc {
     int stride;
 };
 
+// a function has an input and output dimension and implements fwd and bwd pass
+struct Function {
+    // every layer has to implement forward and backward
+    virtual void forward(const Tensor& input, Tensor& output) = 0;
+    virtual void init_forward(const Tensor& input, Tensor& output) {};
+    virtual void backward(const Tensor& doutput, Tensor& dinput) = 0;
+    virtual void init_backward(const Tensor& doutput, Tensor& dinput) {};
 
-struct Layer {
+    // return the input dimensions
+    virtual const TensorDesc& getInputDesc() const = 0;
+
+    /// returns the output dimensions
+    virtual const TensorDesc& getOutputDesc() const = 0;
+
+    // Prints the input and output dimensions to the given stream
+    std::ostream& write_dims(std::ostream& os) const {
+        return os << getInputDesc() << " -> " << getOutputDesc();
+    }
+
+    virtual std::ostream& write_name(std::ostream& os) const {
+        return os << "Function (unknown)";
+    }
+
+    virtual std::ostream& write(std::ostream& os) const {
+        return this->write_dims(this->write_name(os) << ":\t");
+    }
+};
+
+/* a Layer is a Function for which the input and output dimensions are known
+ * at construction time and it buffers these
+ */
+struct Layer : public Function {
     TensorDesc input_desc;
     TensorDesc output_desc;
 
@@ -425,34 +455,20 @@ struct Layer {
     Layer(const TensorDesc& input_desc, const TensorDesc& output_desc)
         : input_desc(input_desc), output_desc(output_desc) {}
 
-    // every layer has to implement forward and backward
-    virtual void forward(const Tensor& input, Tensor& output) = 0;
-    virtual void init_forward(const Tensor& input, Tensor& output) {};
-    virtual void backward(const Tensor& doutput, Tensor& dinput) = 0;
-    virtual void init_backward(const Tensor& doutput, Tensor& dinput) {};
-
-    const TensorDesc& getInputDesc() const {
+    virtual const TensorDesc& getInputDesc() const override {
         return input_desc;
     }
 
-    const TensorDesc& getOutputDesc() const {
+    virtual const TensorDesc& getOutputDesc() const override {
         return output_desc;
     }
 
-    std::ostream& write_dims(std::ostream& os) const {
-        return os << getInputDesc() << " -> " << getOutputDesc();
-    }
-
-    virtual std::ostream& write_name(std::ostream& os) const {
+    virtual std::ostream& write_name(std::ostream& os) const override {
         return os << "Layer (unknown)";
-    }
-
-    virtual std::ostream& write(std::ostream& os) const {
-        return this->write_dims(this->write_name(os) << ":\t");
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const Layer& l) {
+std::ostream& operator<<(std::ostream& os, const Function& l) {
     return l.write(os);
 }
 
@@ -594,7 +610,8 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
 };
 
 
-struct MaxPool : public Layer {
+struct PoolingLayer : public Layer {
+    miopenPoolingMode_t pool_mode;
     miopenPoolingDescriptor_t desc;
 
     // needed for backward: original input, original output, indeces (as workspace)
@@ -605,40 +622,44 @@ struct MaxPool : public Layer {
 
     int kernel_size, padding, stride;
 
-    static Dim getOutputDim(const TensorDesc& input, int kernel_size, int padding, int stride) {
+    static Dim getOutputDim(const TensorDesc& input, int kernel_size, int padding, int stride, miopenPoolingMode_t pool_mode) {
         int n, c, h, w;
 
         miopenPoolingDescriptor_t pool_desc;
         CHECK_MIO(miopenCreatePoolingDescriptor(&pool_desc));
-        CHECK_MIO(miopenSet2dPoolingDescriptor(pool_desc, miopenPoolingMax, kernel_size, kernel_size, padding, padding, stride, stride));
+        CHECK_MIO(miopenSet2dPoolingDescriptor(pool_desc, pool_mode, kernel_size, kernel_size, padding, padding, stride, stride));
         CHECK_MIO(miopenGetPoolingForwardOutputDim(pool_desc, input.desc, &n, &c, &h, &w));
         CHECK_MIO(miopenDestroyPoolingDescriptor(pool_desc));
         return Dim(n, c, h, w);
     }
 
-    virtual std::ostream& write_name(std::ostream& os) const {
-        //return os << "MaxPool(" << kernel_size << "x" << kernel_size << ", pad=" << padding << ",stride=" << stride << ")";
-        return os << "MaxPool(" << kernel_size << "x" << kernel_size << ")";
+    virtual std::ostream& write_name(std::ostream& os) const override {
+        if (pool_mode == miopenPoolingMax)
+            os << "MaxPool(";
+        else
+            os << "AvgPool(";
+        return os << kernel_size << "x" << kernel_size << ")";
     }
 
-    MaxPool(const TensorDesc& input_dim, int kernel_size, int padding, int stride)
-        : Layer((Dim&)input_dim, MaxPool::getOutputDim(input_dim, kernel_size, padding, stride)),
+    PoolingLayer(const TensorDesc& input_dim, int kernel_size, int padding, int stride, miopenPoolingMode_t pool_mode)
+        : Layer((Dim&)input_dim, PoolingLayer::getOutputDim(input_dim, kernel_size, padding, stride, pool_mode)),
+          pool_mode(pool_mode),
           kernel_size(kernel_size), padding(padding), stride(stride) {
         CHECK_MIO(miopenCreatePoolingDescriptor(&desc));
-        CHECK_MIO(miopenSet2dPoolingDescriptor(desc, miopenPoolingMax, kernel_size, kernel_size, padding, padding, stride, stride));
+        CHECK_MIO(miopenSet2dPoolingDescriptor(desc, pool_mode, kernel_size, kernel_size, padding, padding, stride, stride));
     }
 
-    ~MaxPool() {
+    ~PoolingLayer() {
         CHECK_MIO(miopenDestroyPoolingDescriptor(desc));
     }
 
-    void init_forward(const Tensor& input, Tensor& output) {
+    virtual void init_forward(const Tensor& input, Tensor& output) override {
         size_t size;
         CHECK_MIO(miopenPoolingGetWorkSpaceSize(output_desc.desc, &size));
         indeces_buf = DevBuffer(size);
     }
 
-    void forward(const Tensor& input, Tensor& output) {
+    virtual void forward(const Tensor& input, Tensor& output) override {
         float alpha = 1.f;
         float beta = 0.f;
         CHECK_MIO(miopenPoolingForward(mio::handle(), desc, &alpha, input.desc, input.data, &beta, output.desc, output.data, true, indeces_buf.data, indeces_buf.size));
@@ -647,13 +668,22 @@ struct MaxPool : public Layer {
         this->output = &output;
     }
 
-    void backward(const Tensor& doutput, Tensor& dinput) {
+    virtual void backward(const Tensor& doutput, Tensor& dinput) override {
         float alpha = 1.f;
         float beta = 0.f;
         CHECK_MIO(miopenPoolingBackward(mio::handle(), desc, &alpha, getOutputDesc().desc, output->data, doutput.desc, doutput.data, getInputDesc().desc, input->data, &beta, dinput.desc, dinput.data, indeces_buf.data));
     }
 };
 
+struct MaxPool : public PoolingLayer {
+    MaxPool(const TensorDesc& input_dim, int kernel_size, int padding, int stride)
+        : PoolingLayer(input_dim, kernel_size, padding, stride, miopenPoolingMax) {}
+};
+
+struct AvgPool : public PoolingLayer {
+    AvgPool(const TensorDesc& input_dim, int kernel_size, int padding, int stride)
+        : PoolingLayer(input_dim, kernel_size, padding, stride, miopenPoolingAverage) {}
+};
 
 struct ReLU : public Layer {
     miopenActivationDescriptor_t desc;
@@ -839,57 +869,75 @@ struct Reshape : public Layer {
     }
 };
 
-struct Model {
-    Tensor input;
-    bool is_init_fwd;
-    bool is_init_bwd;
-    std::vector<std::shared_ptr<Layer>> layers;
-    std::vector<std::shared_ptr<Tensor>> out_tensors;
 
-    Model(const Dim& input_dim) : input(input_dim) {}
+struct Sequential : public Function {
+    TensorDesc input_desc;
 
-    const TensorDesc& last_output_dim() {
+    std::vector<std::shared_ptr<Function>> layers;
+    std::vector<std::shared_ptr<Tensor>> out_tensors; // the inner buffers
+
+    Sequential(const TensorDesc& input_dim) : input_desc(input_dim) {}
+
+    const TensorDesc& last_output_dim() const {
         if (layers.empty()) {
-            return input;
+            return input_desc;
         } else {
             return layers.back()->getOutputDesc();
         }
     }
 
+    virtual const TensorDesc& getInputDesc() const override {
+        return input_desc;
+    }
+
+    virtual const TensorDesc& getOutputDesc() const override {
+        return last_output_dim();
+    }
+
+    // Calls the LayerType constructor with the input dimension as first argument
+    // and then the given arguments LayerType(input_dim, args...);
+    template <typename LayerType, typename... Args>
+    void emplaceLayer(Args... args) {
+        if (!layers.empty()) {
+            out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        }
+        layers.emplace_back(new LayerType(last_output_dim(), args...));
+    }
+
     void addConv(int output_channels, int kernel_size, int padding, int stride) {
-        layers.emplace_back(new ConvLayer(last_output_dim(), output_channels, kernel_size, padding, stride));
-        out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        emplaceLayer<ConvLayer>(output_channels, kernel_size, padding, stride);
     }
 
     void addReLU() {
-        layers.emplace_back(new ReLU(last_output_dim()));
-        // TODO: enable inplace ReLU
-        out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        emplaceLayer<ReLU>();
     }
 
     void addMaxPool(int kernel_size, int padding, int stride) {
-        layers.emplace_back(new MaxPool(last_output_dim(), kernel_size, padding, stride));
-        out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        emplaceLayer<MaxPool>(kernel_size, padding, stride);
     }
 
     void addLinear(int outsize) {
-        layers.emplace_back(new Linear(last_output_dim(), outsize));
-        out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        emplaceLayer<Linear>(outsize);
     }
 
     void reshape(int n, int c, int h, int w) {
-        layers.emplace_back(new Reshape(last_output_dim(), n, c, h, w));
-        out_tensors.emplace_back(new Tensor(n, c, h, w, false)); /* Tensor data gets set in forward() */
+        emplaceLayer<Reshape>(n,c,h,w);
+        //out_tensors.emplace_back(new Tensor(n, c, h, w, false)); /* Tensor data gets set in forward() */
     }
 
     // for each layer, calls f(Layer& l, Tensor& in, Tensor& out);
     template <typename Func>
-    void forward_pass(Func f) {
-        Tensor* in = &input;
+    void forward_pass(const Tensor& input, Tensor& output, Func f) {
+        assert(layers.size() > 0);
+        const Tensor* in = &input;
         Tensor* out;
 
         for (size_t i = 0; i < layers.size(); ++i) {
-            out = out_tensors[i].get();
+            if (i < layers.size()-1) {
+                out = out_tensors[i].get();
+            } else {
+                out = &output;
+            }
             f(*layers[i], *in, *out);
             in = out;
         }
@@ -897,25 +945,74 @@ struct Model {
 
     // for each layer backwards, calls b(Layer& l, Tensor& dout, Tensor& din)
     template <typename Func>
-    void backward_pass(Func b) {
+    void backward_pass(const Tensor& doutput, Tensor& dinput, Func b) {
         assert(out_tensors.size() > 0);
-        Tensor* dout = out_tensors.back().get();
+        const Tensor* dout = &doutput;
         Tensor* din;
         for (size_t i = 0; i < layers.size(); ++i) {
             if (i < layers.size()-1) {
-                din = out_tensors[out_tensors.size()-i-2].get();
+                din = out_tensors[layers.size()-i-2].get();
             } else {
-                din = &input;
+                din = &dinput;
             }
-            b(*layers[out_tensors.size()-i-1], *dout, *din);
+            b(*layers[layers.size()-i-1], *dout, *din);
             dout = din;
         }
     }
 
-
     // initializes all layers for fwd
+    virtual void init_forward(const Tensor& in, Tensor& out) override {
+        forward_pass(in, out, [](Function& l, const Tensor& i, Tensor& o){
+            l.init_forward(i, o);
+        });
+    }
+
+    virtual void forward(const Tensor& in, Tensor& out) override {
+        forward_pass(in, out, [](Function& l, const Tensor& i, Tensor& o){
+            std::stringstream ss;
+            ss << "Fwd " << l;
+            timed_section s(ss.str());
+            l.forward(i, o);
+            CHECK_HIP(hipDeviceSynchronize());
+        });
+    }
+
+    virtual void init_backward(const Tensor& dout, Tensor& din) override {
+        backward_pass(dout, din, [](Function& l, const Tensor& o, Tensor& i){
+            l.init_backward(o, i);
+        });
+    }
+
+    virtual void backward(const Tensor& dout, Tensor& din) override {
+        backward_pass(dout, din, [](Function& l, const Tensor& o, Tensor& i) {
+            std::stringstream ss;
+            ss << "Bwd " << l;
+            timed_section s(ss.str());
+            l.backward(o, i);
+            CHECK_HIP(hipDeviceSynchronize());
+        });
+    }
+};
+
+
+struct Model : public Sequential {
+
+    Tensor input;
+    Tensor output;
+    bool is_init_fwd;
+    bool is_init_bwd;
+
+    Model(const TensorDesc& input_dim) : Sequential(input_dim), input(input_dim) {}
+
+    using Sequential::init_forward;
+    using Sequential::init_backward;
+    using Sequential::forward;
+    using Sequential::backward;
+
     void init_forward() {
-        forward_pass([](Layer& l, Tensor& in, Tensor& out){l.init_forward(in, out);});
+        if (output.data_size == 0)
+            output = Tensor(this->getOutputDesc());
+        this->init_forward(input, output);
         is_init_fwd = true;
     }
 
@@ -923,17 +1020,14 @@ struct Model {
         if (!is_init_fwd) {
             init_forward();
         }
-        forward_pass([](Layer& l, Tensor& in, Tensor& out){
-            std::stringstream ss;
-            ss << "Fwd " << l;
-            timed_section s(ss.str());
-            l.forward(in, out);
-            CHECK_HIP(hipDeviceSynchronize());
-        });
+        this->forward(input, output);
     }
 
     void init_backward() {
-        backward_pass([](Layer& l, Tensor& dout, Tensor& din){l.init_backward(dout, din);});
+        if (!is_init_fwd) {
+            init_forward();
+        }
+        this->init_backward(output, input);
         is_init_bwd = true;
     }
 
@@ -941,17 +1035,9 @@ struct Model {
         if (!is_init_bwd) {
             init_backward();
         }
-        backward_pass([](Layer& l, Tensor& dout, Tensor& din) {
-            std::stringstream ss;
-            ss << "Bwd " << l;
-            timed_section s(ss.str());
-            l.backward(dout, din);
-            CHECK_HIP(hipDeviceSynchronize());
-        });
+        this->backward(output, input);
     }
 };
-
-
 
 void benchmark_convlayers() {
     // batch_size, w, h, channels_in, channels_out, kernel_size, padding, stride
@@ -1039,9 +1125,9 @@ void benchmark_convlayers() {
 /* TODO:
  * - [ ] create AlexNet class
  * - [ ] uniform random tensors (via host->device copy), and CPU initialized tensors
- * - [ ] simple print tensor function for verifying mm_blas
  * - [ ] Make `Model` take input and output tensors in forward(), backward()
- * - [ ] Create runner and benchmarker class
+ * - [ ] Collect total and average times per layer
+ * - [ ] implement and benchmark ResNet
  */
 
 void alexNet() {
@@ -1064,7 +1150,7 @@ void alexNet() {
     m.addReLU();
     m.addMaxPool(3, 0, 2);
 
-    DEBUG("DIms after Features; " << m.last_output_dim());
+    DEBUG("Dims after Features; " << m.last_output_dim());
 
     /* classifier */
     // TODO Dropout
