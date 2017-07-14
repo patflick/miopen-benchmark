@@ -1,4 +1,5 @@
 
+
 #include <assert.h>
 
 #include <iostream>
@@ -14,7 +15,7 @@
 
 #include <miopen/miopen.h>
 #include <hipblas.h>
-#include <gperftools/profiler.h>
+//#include <gperftools/profiler.h>
 
 //#define WITH_CL
 
@@ -313,6 +314,27 @@ struct Tensor : public TensorDesc {
         hipDeviceSynchronize();
     }
 
+    void print_data() {
+        std::vector<float> hostTensor = toHost();
+        assert(h == 1 && w == 1); // current limitation
+        assert(hostTensor.size() == n*c);
+        std::cout << "Tensor of size " << *this << ":" << std::endl << "[";
+        for (size_t i = 0; i < n; ++i) {
+            if (i > 0)
+                std::cout << " ";
+            std::cout << "[";
+            for (size_t j = 0; j < c; ++j) {
+                std::cout << hostTensor[i*n + j];
+                if (j+1 < c)
+                    std::cout << ", ";
+            }
+            if (i+1 < n)
+                std::cout << "]," << std::endl;
+            else
+                std::cout << "]]" << std::endl;
+        }
+    }
+
     void alloc() {
         DEBUG("Allocating Float Tensor (" << n << "," << c << "," << h << "," << h << "), total size: " << data_size / 1024 << " kB");
         data = device_alloc(data_size);
@@ -523,6 +545,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     }
 
     void init_forward(const Tensor& input, Tensor& output) override {
+        DEBUG("init conv " << *this);
         size_t workspace_size;
         CHECK_MIO(miopenConvolutionForwardGetWorkSpaceSize(mio::handle(), weights.desc, input.desc, this->desc, output.desc, &workspace_size));
 
@@ -872,11 +895,12 @@ struct Reshape : public Layer {
 
 struct Sequential : public Function {
     TensorDesc input_desc;
-
     std::vector<std::shared_ptr<Function>> layers;
     std::vector<std::shared_ptr<Tensor>> out_tensors; // the inner buffers
 
     Sequential(const TensorDesc& input_dim) : input_desc(input_dim) {}
+    Sequential(const Sequential&) = default;
+    Sequential(Sequential&&) = default;
 
     const TensorDesc& last_output_dim() const {
         if (layers.empty()) {
@@ -897,31 +921,47 @@ struct Sequential : public Function {
     // Calls the LayerType constructor with the input dimension as first argument
     // and then the given arguments LayerType(input_dim, args...);
     template <typename LayerType, typename... Args>
-    void emplaceLayer(Args... args) {
+    void emplace(Args... args) {
         if (!layers.empty()) {
             out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
         }
         layers.emplace_back(new LayerType(last_output_dim(), args...));
     }
 
+    template <typename LayerType>
+    void add(const LayerType& l) {
+        if (!layers.empty()) {
+            out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        }
+        layers.emplace_back(new LayerType(l));
+    }
+
+    template <typename LayerType>
+    void add(LayerType&& l) {
+        if (!layers.empty()) {
+            out_tensors.emplace_back(new Tensor(layers.back()->getOutputDesc()));
+        }
+        layers.emplace_back(new typename std::remove_reference<LayerType>::type(std::move(l)));
+    }
+
     void addConv(int output_channels, int kernel_size, int padding, int stride) {
-        emplaceLayer<ConvLayer>(output_channels, kernel_size, padding, stride);
+        emplace<ConvLayer>(output_channels, kernel_size, padding, stride);
     }
 
     void addReLU() {
-        emplaceLayer<ReLU>();
+        emplace<ReLU>();
     }
 
     void addMaxPool(int kernel_size, int padding, int stride) {
-        emplaceLayer<MaxPool>(kernel_size, padding, stride);
+        emplace<MaxPool>(kernel_size, padding, stride);
     }
 
     void addLinear(int outsize) {
-        emplaceLayer<Linear>(outsize);
+        emplace<Linear>(outsize);
     }
 
     void reshape(int n, int c, int h, int w) {
-        emplaceLayer<Reshape>(n,c,h,w);
+        emplace<Reshape>(n,c,h,w);
         //out_tensors.emplace_back(new Tensor(n, c, h, w, false)); /* Tensor data gets set in forward() */
     }
 
@@ -946,7 +986,7 @@ struct Sequential : public Function {
     // for each layer backwards, calls b(Layer& l, Tensor& dout, Tensor& din)
     template <typename Func>
     void backward_pass(const Tensor& doutput, Tensor& dinput, Func b) {
-        assert(out_tensors.size() > 0);
+        assert(layers.size() > 0);
         const Tensor* dout = &doutput;
         Tensor* din;
         for (size_t i = 0; i < layers.size(); ++i) {
@@ -964,6 +1004,7 @@ struct Sequential : public Function {
     virtual void init_forward(const Tensor& in, Tensor& out) override {
         forward_pass(in, out, [](Function& l, const Tensor& i, Tensor& o){
             l.init_forward(i, o);
+            CHECK_HIP(hipDeviceSynchronize());
         });
     }
 
@@ -980,6 +1021,7 @@ struct Sequential : public Function {
     virtual void init_backward(const Tensor& dout, Tensor& din) override {
         backward_pass(dout, din, [](Function& l, const Tensor& o, Tensor& i){
             l.init_backward(o, i);
+            CHECK_HIP(hipDeviceSynchronize());
         });
     }
 
@@ -1003,6 +1045,8 @@ struct Model : public Sequential {
     bool is_init_bwd;
 
     Model(const TensorDesc& input_dim) : Sequential(input_dim), input(input_dim) {}
+    Model(const Model&) = default;
+    Model(Model&&) = default;
 
     using Sequential::init_forward;
     using Sequential::init_backward;
@@ -1122,45 +1166,151 @@ void benchmark_convlayers() {
 
 }
 
+
+// impleents x += y
+void add_inplace(Tensor& x, const Tensor& y) {
+    float alpha1 = 1.f, alpha2 = 1.f, beta = 0.f;
+    miopenOpTensor(mio::handle(), miopenTensorOpAdd, &alpha1, x.desc, x.data, &alpha2, y.desc, y.data, &beta, x.desc, x.data);
+}
+
+struct ShortCutAdd : public Function {
+    // Implements Residual Shortcutting: y = F(x) + x
+    //   where F(x) is any Function with matching input and output dimensions
+    // Forward and backward are symmetric in this specific case when addition
+    // is used as the combination:
+    //   forward(in,out):
+    //       out = F.fwd(in) + in (elementwise add)
+    //   backward(dout, din):
+    //       din = F.bwd(dout) + dout
+
+    TensorDesc input_desc;
+    std::shared_ptr<Function> F;
+    // optional function for second path
+    std::shared_ptr<Function> G;
+    // buffers for G outputs
+    Tensor gout;
+    Tensor gdin;
+
+    ShortCutAdd(const TensorDesc& input_dim) : input_desc(input_dim) {
+    }
+    ShortCutAdd(const ShortCutAdd&) = default;
+    ShortCutAdd(ShortCutAdd&&) = default;
+
+    template <typename Func>
+    void setF(Func f) {
+        F = std::shared_ptr<Function>(new typename std::remove_reference<Func>::type(std::forward<Func>(f)));
+    }
+
+    template <typename Func>
+    void setG(Func g) {
+        G = std::shared_ptr<Function>(new typename std::remove_reference<Func>::type(std::forward<Func>(g)));
+        gout = Tensor(G->getOutputDesc());
+        gdin = Tensor(input_desc);
+    }
+
+    virtual const TensorDesc& getInputDesc() const override {
+        return F->getOutputDesc();
+    }
+
+    virtual const TensorDesc& getOutputDesc() const override {
+        assert(F.get() != nullptr);
+        return F->getOutputDesc();
+    }
+
+    virtual void forward(const Tensor& in, Tensor& out) override {
+        assert(F.get() != nullptr);
+        F->forward(in, out);
+        if (G.get() != nullptr) {
+            G->forward(in, gout);
+            add_inplace(out, gout);
+        } else {
+            add_inplace(out, in);
+        }
+    }
+
+    virtual void init_forward(const Tensor& in, Tensor& out) {
+        F->init_forward(in, out);
+        if (G.get() != nullptr) {
+            G->init_forward(in, gout);
+        }
+    }
+
+    virtual void backward(const Tensor& dout, Tensor& din) override {
+        F->backward(dout, din);
+        if (G.get() != nullptr) {
+            G->backward(dout, gdin);
+            add_inplace(din, gdin);
+        } else {
+            add_inplace(din, dout);
+        }
+    }
+
+    virtual void init_backward(const Tensor& dout, Tensor& din) override {
+        F->init_backward(dout, din);
+        if (G.get() != nullptr) {
+            G->init_backward(dout, gdin);
+        }
+    }
+};
+
+/* TODO ResNet
+ * - [x] ShortCut module
+ * - [x] tensor elementwise addition
+ * - [ ] BatchNorm
+ */
+
 /* TODO:
  * - [ ] create AlexNet class
  * - [ ] uniform random tensors (via host->device copy), and CPU initialized tensors
- * - [ ] Make `Model` take input and output tensors in forward(), backward()
+ * - [x] Make `Model` take input and output tensors in forward(), backward()
  * - [ ] Collect total and average times per layer
  * - [ ] implement and benchmark ResNet
  */
 
-void alexNet() {
+struct layertimer {
+    std::string name;
+    using duration = std::chrono::steady_clock::duration;
+    using time_point = std::chrono::steady_clock::time_point;
+    duration cum_time;
+    std::vector<duration> lap_times;
+    time_point tic_tp;
+    layertimer(const std::string& name) : name(name), cum_time(0) {
+    }
+
+    void tic() {
+        tic_tp = std::chrono::steady_clock::now();
+    }
+
+    void toc() {
+        time_point toc_tp = std::chrono::steady_clock::now();
+        lap_times.emplace_back(toc_tp - tic_tp);
+        cum_time += lap_times.back();
+    }
+
+    duration total_time() const {
+        return cum_time;
+    }
+
+    float total_time_ms() const {
+        return std::chrono::duration_cast<std::chrono::microseconds>(cum_time).count() / 1000.f;
+    }
+
+    float avg_time_ms() const {
+        return std::chrono::duration_cast<std::chrono::microseconds>(cum_time).count() / 1000.f / lap_times.size();
+    }
+
+    std::vector<float> times_ms() const {
+        std::vector<float> result(lap_times.size());
+        for (size_t i = 0; i < lap_times.size(); ++i) {
+            result[i] = std::chrono::duration_cast<std::chrono::microseconds>(lap_times[i]).count() / 1000.f;
+        }
+        return result;
+    }
+};
+
+
+void runModel(Model& m) {
     int reps = 10;
-    TensorDesc input_dim(128, 3, 224, 224);
-
-    Model m(input_dim);
-    /* features */
-    m.addConv(64, 11, 2, 4);
-    m.addReLU();
-    m.addMaxPool(3, 0, 2);
-    m.addConv(192, 5, 2, 1);
-    m.addReLU();
-    m.addMaxPool(3, 0, 2);
-    m.addConv(384, 3, 1, 1);
-    m.addReLU();
-    m.addConv(256, 3, 1, 1);
-    m.addReLU();
-    m.addConv(256, 3, 1, 1);
-    m.addReLU();
-    m.addMaxPool(3, 0, 2);
-
-    DEBUG("Dims after Features; " << m.last_output_dim());
-
-    /* classifier */
-    // TODO Dropout
-    m.reshape(128, 256 * 6 * 6, 1, 1);
-    m.addLinear(4096);
-    m.addReLU();
-    // TODO: Dropout
-    m.addLinear(4096);
-    m.addReLU();
-    m.addLinear(1000);
 
     INFO("Init fwd");
     m.init_forward();
@@ -1168,7 +1318,7 @@ void alexNet() {
     m.init_backward();
 
     INFO("Begin warmup runs");
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 1; ++i) {
         {
             INFO("               ======= BEGIN FWD =======");
             timed_section s("Fwd Pass");
@@ -1184,25 +1334,147 @@ void alexNet() {
     }
 
     INFO("Begin Timings");
-    std::chrono::steady_clock::duration fwdtime;
+
+    layertimer fwdtime("fwd");
+    layertimer bwdtime("bwd");
     auto tic = std::chrono::steady_clock::now();
     for (int i = 0; i < reps; ++i) {
         {
             INFO("               ======= BEGIN FWD =======");
-            timed_section s("Fwd Pass");
-            //auto tic = std::chrono::steady_clock::now();
+            fwdtime.tic();
             m.forward();
-            //auto toc = 
+            fwdtime.toc();
         }
         {
             INFO("               ======= BEGIN BWD =======");
-            timed_section s("Bwd Pass");
+            bwdtime.tic();
             m.backward();
+            bwdtime.toc();
         }
     }
     auto toc = std::chrono::steady_clock::now();
     double time = std::chrono::duration_cast<std::chrono::milliseconds>(toc - tic).count()*1.0/reps;
+    INFO("Avg time per fwd " << fwdtime.avg_time_ms() << " ms");
+    INFO("Avg time per bwd " << bwdtime.avg_time_ms() << " ms");
     INFO("Avg time per fwd+bwd: " << time << " ms");
+}
+
+Sequential makeBlock(const TensorDesc& input_dim, int planes, int stride=1, bool downsample = false) {
+    // BasicBlock
+    DEBUG("making block with dim " << input_dim );
+    Sequential preblock(input_dim);
+    preblock.emplace<ConvLayer>(planes, 3, 1, stride);
+    //block.emplace<BatchNorm>(outplanes) TODO BatchNorm
+    preblock.emplace<ReLU>();
+    preblock.emplace<ConvLayer>(planes, 3, 1, 1);
+    //block.emplace<BatchNorm>(outplanes) TODO BatchNorm
+
+
+    Sequential down_block(input_dim);
+    down_block.emplace<ConvLayer>(planes, 1, 0, stride);
+    // TODO: batchnorm for down_block
+
+    Sequential block(input_dim);
+    ShortCutAdd s(input_dim);
+    s.setF(preblock);
+    if (downsample) {
+        s.setG(down_block);
+    }
+    block.add(s);
+    block.emplace<ReLU>();
+    return block;
+}
+
+Sequential makeLayer(const TensorDesc& input_dim, int planes, int blocks, int stride=1) {
+    Sequential layer(input_dim);
+
+    // add one downsample block inplanes -> planes, stride
+    bool downsample = stride != 1;
+    layer.add(makeBlock(layer.getOutputDesc(), planes, stride, downsample));
+
+    for (int i = 0; i < blocks; ++i) {
+        layer.add(makeBlock(layer.getOutputDesc(), planes));
+    }
+    return layer;
+}
+
+void resnet() {
+
+    TensorDesc input_dim(128, 3, 224, 224);
+
+    Model m(input_dim);
+
+    Sequential pre(input_dim);
+    pre.emplace<ConvLayer>(64, 7, 3, 2);
+    // TODO batch norm
+    pre.emplace<ReLU>();
+    pre.emplace<MaxPool>(3, 0, 2);
+    DEBUG("ResNet Pre output dims: " << pre.getOutputDesc());
+
+    m.add(pre);
+
+    // ResNet 18
+    std::vector<int> layers = {2, 2, 2, 2};
+
+    m.add(makeLayer(m.getOutputDesc(), 64, layers[0]));
+    m.add(makeLayer(m.getOutputDesc(), 128, layers[1], 2));
+    m.add(makeLayer(m.getOutputDesc(), 256, layers[2], 2));
+    m.add(makeLayer(m.getOutputDesc(), 512, layers[3], 2));
+    m.emplace<AvgPool>(7, 0, 1);
+
+    runModel(m);
+}
+
+void alexNet() {
+    TensorDesc input_dim(128, 3, 224, 224);
+
+    Sequential features(input_dim);
+    /* features */
+    features.addConv(64, 11, 2, 4);
+    features.addReLU();
+    features.addMaxPool(3, 0, 2);
+    features.addConv(192, 5, 2, 1);
+    features.addReLU();
+    features.addMaxPool(3, 0, 2);
+    features.addConv(384, 3, 1, 1);
+    features.addReLU();
+    features.addConv(256, 3, 1, 1);
+    features.addReLU();
+    features.addConv(256, 3, 1, 1);
+    features.addReLU();
+    features.addMaxPool(3, 0, 2);
+
+    DEBUG("Dims after Features: " << features.getOutputDesc());
+
+    /* classifier */
+    Sequential classifier(features.getOutputDesc());
+    // TODO Dropout
+    classifier.reshape(128, 256 * 6 * 6, 1, 1);
+    classifier.addLinear(4096);
+    classifier.addReLU();
+    // TODO: Dropout
+    classifier.addLinear(4096);
+    classifier.addReLU();
+    classifier.addLinear(1000);
+
+    Model m(input_dim);
+    m.add(features);
+    m.add(classifier);
+
+    runModel(m);
+}
+
+void check_add() {
+    Tensor x(2, 2, 1, 1);
+    x.fromHost({3, 4, 2, 1});
+    x.print_data();
+
+    Tensor y(2, 2, 1, 1);
+    y.fromHost({-3, .15, 2, 5});
+    y.print_data();
+
+    add_inplace(x, y);
+    x.print_data();
 }
 
 int main(int argc, char *argv[])
@@ -1214,6 +1486,7 @@ int main(int argc, char *argv[])
 
     alexNet();
     //benchmark_convlayers();
+    //resnet();
 
     miopenDestroy(mio::handle());
     return 0;
