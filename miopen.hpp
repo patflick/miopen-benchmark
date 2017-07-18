@@ -84,6 +84,11 @@ void device_free(device_mem_t m) {
     CHECK_HIP(hipFree(m));
 }
 
+inline bool exists_test0 (const std::string& name) {
+    ifstream f(name.c_str());
+    return f.good();
+}
+
 void device_init() {
     int devcount;
     CHECK_HIP(hipGetDeviceCount(&devcount));
@@ -104,7 +109,9 @@ void device_init() {
 #endif
     }
 
-
+    // card folder
+    // via parsing and looking into /sys/class/drm/card*/device/uevent
+    // for the PCI_SLOT_NAME=
     
 }
 
