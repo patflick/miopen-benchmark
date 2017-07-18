@@ -108,6 +108,37 @@ void device_init() {
     
 }
 
+std::vector<std::string> split(const std::string& str, char sep) {
+    std::vector<std::string> strings;
+    std::istringstream f(str);
+    std::string s;
+    while (std::getline(f, s, sep)) {
+        strings.push_back(s);
+    }
+    return strings;
+}
+
+void find_cards() {
+    for (int i = 0; i < 10; ++i) {
+        std::stringstream ss;
+        ss << "/sys/class/drm/card" << i << "/device/uevent";
+        std::fstream f(ss.str());
+        bool found = false;
+        if (f.is_good()) {
+            std::string line
+            while (std::getline(f, line)) {
+                if (split(line, '=')[0] == "PCI_SLOT") {
+                    std::string pciids = split(line, '=')[1];
+                    std::vector<std::string> ids = split(pciids, ':');
+                    found = true;
+                    // TODO: set/save PCI BusID
+                    
+                }
+            }
+        }
+    }
+}
+
 #endif
 
 const char* mio_err[] = {
