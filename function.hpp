@@ -17,11 +17,11 @@ struct Function {
 
     // Prints the input and output dimensions to the given stream
     std::ostream& write_dims(std::ostream& os) const {
-        return os << getInputDesc() << " -> " << getOutputDesc();
+        return os << getInputDesc() << "->" << getOutputDesc();
     }
 
     virtual std::ostream& write_name(std::ostream& os) const {
-        return os << "Function (unknown)";
+        return os << "Function";
     }
 
     virtual std::ostream& write(std::ostream& os) const {
@@ -51,7 +51,7 @@ struct Layer : public Function {
     }
 
     virtual std::ostream& write_name(std::ostream& os) const override {
-        return os << "Layer (unknown)";
+        return os << "Layer";
     }
 };
 

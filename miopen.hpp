@@ -5,6 +5,11 @@
 #include <hipblas.h>
 //#include <gperftools/profiler.h>
 
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <sstream>
+
 //#define WITH_CL
 
 #ifdef WITH_CL

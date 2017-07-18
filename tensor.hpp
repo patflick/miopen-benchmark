@@ -1,6 +1,12 @@
 #ifndef TENSOR_HPP
 #define TENSOR_HPP
 
+#include <assert.h>
+#include <vector>
+#include <string>
+#include <iostream>
+#include <algorithm>
+
 // class for wrapping around device buffers
 struct DevBuffer {
     device_mem_t data;

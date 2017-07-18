@@ -84,14 +84,21 @@ struct BenchmarkLogger : public Timer {
 
     std::chrono::steady_clock::time_point start_time;
 
-    BenchmarkLogger(const std::string& filename = "benchmark.log")
-        : of(filename), start_time(std::chrono::steady_clock::now()) {
-        init();
-    }
-
     void init() {
         of << "Timestamp\tModule\tDir\tTime\tTemp\tFan\tClock" << std::endl;
     }
+
+    BenchmarkLogger() : of(), start_time() {}
+
+    BenchmarkLogger(const std::string& filename)
+        : of(filename), start_time(std::chrono::steady_clock::now()) {
+        init();
+        std::cout << " >>>>> Init BenchmarkLogger with file " << filename << std::endl;
+    }
+
+    BenchmarkLogger(BenchmarkLogger&&) = default;
+    BenchmarkLogger& operator=(BenchmarkLogger&&) = default;
+
 
     void log_step(const std::string& module_name, bool bwd, float duration) {
         auto toc = std::chrono::steady_clock::now();
@@ -104,20 +111,25 @@ struct BenchmarkLogger : public Timer {
         INFO(module_name << ":\t" << duration << " ms");
     }
 
-    static BenchmarkLogger new_instance() {
-        static int count = 0;
-        std::stringstream ss;
-        ++count;
-        ss << "benchmark_" << count << ".log";
-        return BenchmarkLogger(ss.str());
+    static BenchmarkLogger& instance() {
+        static BenchmarkLogger bm = BenchmarkLogger();
+        return bm;
     }
 
-    static BenchmarkLogger& instance(bool make_new = false) {
-        static BenchmarkLogger bm = new_instance();
-        if (make_new) {
-            bm = new_instance();
+    static void new_session(const std::string& name = "") {
+        static int count = 0;
+        ++count;
+        std::stringstream ss;
+        if (name == "") {
+            ss << "benchmark_" << count << ".log";
+        } else {
+            ss << name << ".log";
         }
-        return bm;
+        if (instance().of.is_open())
+            instance().of.close();
+        instance().of.open(ss.str());
+        instance().init();
+        instance().start_time = std::chrono::steady_clock::now();
     }
 
     static void log(const std::string& module_name, bool bwd, float duration) {
@@ -134,7 +146,29 @@ struct BenchmarkLogger : public Timer {
     }
 
     template <typename M>
-    void benchmark(M& m, int reps = 10, bool runbwd = true) {
+    static void benchmark(M& m, int reps = 10, bool runbwd = true) {
+        instance().do_benchmark(m, reps, runbwd);
+    }
+
+    template <typename M>
+    void do_fwd_layer_benchmark(M& m, int reps = 10) {
+        INFO("Init fwd");
+        m.init_forward();
+        float layer_time;
+        for (int i = 0; i < reps; ++i) {
+            m.forward();
+            CHECK_MIO(miopenGetKernelTime(mio::handle(), &layer_time));
+            log_step("KernelTime", false, layer_time);
+        }
+    }
+
+    template <typename M>
+    static void fwd_layer_benchmark(M& m, int reps = 10) {
+        instance().do_fwd_layer_benchmark(m, reps);
+    }
+
+    template <typename M>
+    void do_benchmark(M& m, int reps = 10, bool runbwd = true) {
         INFO("Init fwd");
         m.init_forward();
         if (runbwd) {
