@@ -121,9 +121,9 @@ struct BenchmarkLogger : public Timer {
         ++count;
         std::stringstream ss;
         if (name == "") {
-            ss << "benchmark_" << count << ".log";
+            ss << "benchmark_" << count << ".tsv";
         } else {
-            ss << name << ".log";
+            ss << name << ".tsv";
         }
         if (instance().of.is_open())
             instance().of.close();

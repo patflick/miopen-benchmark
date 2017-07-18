@@ -116,7 +116,7 @@ const char* mio_err[] = {
 };
 
 #define DEBUG(msg) std::cerr << "[DEBUG] " << msg << std::endl;
-#define INFO(msg) std::cerr << "[INFO]  " << msg << std::endl;
+#define INFO(msg) std::cout << "[INFO]  " << msg << std::endl;
 
 #define CHECK_MIO(cmd) \
 {\
