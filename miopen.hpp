@@ -96,10 +96,14 @@ void device_init() {
         std::cout << "\t\tGMem:\t" << props.totalGlobalMem/1024/1024 << " MiB" << std::endl;
         std::cout << "\t\twarps:\t" << props.warpSize << std::endl;
         std::cout << "\t\tCUs:\t" << props.multiProcessorCount << std::endl;
+        std::cout << "\t\tpciDeviceID:\t" << props.pciDeviceID << std::endl;
 #ifdef __HIP_PLATFORM_HCC__
         std::cout << "\t\tArch:\t" << props.gcnArch << std::endl;
 #endif
     }
+
+
+    
 }
 
 #endif
