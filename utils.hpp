@@ -85,7 +85,7 @@ struct BenchmarkLogger : public Timer {
     std::chrono::steady_clock::time_point start_time;
 
     void init() {
-        of << "Timestamp\tModule\tDir\tTime\tTemp\tFan\tClock" << std::endl;
+        of << "Timestamp\tModule\tDir\tTime\tTemp\tFan\tClock\tMemClock" << std::endl;
     }
 
     BenchmarkLogger() : of(), start_time() {}
@@ -93,12 +93,10 @@ struct BenchmarkLogger : public Timer {
     BenchmarkLogger(const std::string& filename)
         : of(filename), start_time(std::chrono::steady_clock::now()) {
         init();
-        std::cout << " >>>>> Init BenchmarkLogger with file " << filename << std::endl;
     }
 
     BenchmarkLogger(BenchmarkLogger&&) = default;
     BenchmarkLogger& operator=(BenchmarkLogger&&) = default;
-
 
     void log_step(const std::string& module_name, bool bwd, float duration) {
         auto toc = std::chrono::steady_clock::now();
@@ -107,7 +105,8 @@ struct BenchmarkLogger : public Timer {
         float temp = getTemp();
         int fan = getFanspeed();
         int clk = getClock();
-        of << timestamp << "\t" << module_name << "\t" << dir << "\t" << duration << "\t" << temp << "\t" << fan << "\t" << clk << std::endl;
+        int mclk = getMemClock();
+        of << timestamp << "\t" << module_name << "\t" << dir << "\t" << duration << "\t" << temp << "\t" << fan << "\t" << clk << "\t" << mclk << std::endl;
         INFO(module_name << ":\t" << duration << " ms");
     }
 
