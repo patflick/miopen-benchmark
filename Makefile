@@ -17,6 +17,9 @@ benchmark: all
 alexnet: alexnet.cpp $(HEADERS)
 	$(HIPCC) $(HIPCC_FLAGS) alexnet.cpp $(LD_FLAGS) -o $@
 
+main: main.cpp $(HEADERS)
+	$(HIPCC) $(HIPCC_FLAGS) main.cpp $(LD_FLAGS) -o $@
+
 gputop: gputop.cpp miopen.hpp
 	$(HIPCC) $(HIPCC_FLAGS) gputop.cpp $(LD_FLAGS) -o $@
 
@@ -28,9 +31,6 @@ benchmark_wino: benchmark_wino.cpp $(HEADERS)
 
 layerwise: layerwise.cpp $(HEADERS)
 	$(HIPCC) $(HIPCC_FLAGS) layerwise.cpp $(LD_FLAGS) -o $@
-
-#segfault: conv_segfault.cpp
-#	$(HIPCC) $(HIPCC_FLAGS) conv_segfault.cpp $(LD_FLAGS) -o $@
 
 clean:
 	rm -f *.o *.out benchmark segfault alexnet resnet benchmark_wino layerwise gputop

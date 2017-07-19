@@ -1,18 +1,3 @@
-
-
-#include <assert.h>
-
-#include <iostream>
-#include <chrono>
-#include <vector>
-#include <memory>
-#include <string>
-#include <iostream>
-#include <sstream>
-#include <fstream>
-#include <algorithm>
-
-
 #include "miopen.hpp"
 #include "tensor.hpp"
 #include "utils.hpp"
@@ -69,18 +54,6 @@ void alexNet() {
     BenchmarkLogger::benchmark(m);
 }
 
-void check_add() {
-    Tensor x(2, 2, 1, 1);
-    x.fromHost({3, 4, 2, 1});
-    x.print_data();
-
-    Tensor y(2, 2, 1, 1);
-    y.fromHost({-3, .15, 2, 5});
-    y.print_data();
-
-    add_inplace(x, y);
-    x.print_data();
-}
 
 int main(int argc, char *argv[])
 {

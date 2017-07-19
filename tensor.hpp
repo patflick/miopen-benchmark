@@ -98,6 +98,14 @@ struct TensorDesc : public Dim {
         return *this;
     }
 
+    // updates the `Dim` fields by reading the descriptor `desc` with Get4dTensorDescriptor
+    void update_get() {
+        miopenDataType_t dt;
+        int ns, cs, hs, ws;
+        CHECK_MIO(miopenGet4dTensorDescriptor(desc, &dt, &n, &c, &h, &w, &ns, &cs, &hs, &ws));
+        assert(dt == miopenFloat);
+    }
+
     void free() {
         if (!(n == 0 && c == 0 && h == 0 && w == 0)) {
             CHECK_MIO(miopenDestroyTensorDescriptor(desc));

@@ -16,21 +16,21 @@ Sequential makeBlock(const TensorDesc& input_dim, int planes, int stride=1, bool
     DEBUG("making block with dim " << input_dim );
     Sequential preblock(input_dim);
     preblock.emplace<ConvLayer>(planes, 3, 1, stride);
-    //block.emplace<BatchNorm>(outplanes) TODO BatchNorm
+    preblock.emplace<BatchNorm>();
     preblock.emplace<ReLU>();
     preblock.emplace<ConvLayer>(planes, 3, 1, 1);
-    //block.emplace<BatchNorm>(outplanes) TODO BatchNorm
+    preblock.emplace<BatchNorm>();
 
 
-    Sequential down_block(input_dim);
-    down_block.emplace<ConvLayer>(planes, 1, 0, stride);
-    // TODO: batchnorm for down_block
+    Sequential downsample_block(input_dim);
+    downsample_block.emplace<ConvLayer>(planes, 1, 0, stride);
+    downsample_block.emplace<BatchNorm>();
 
     Sequential block(input_dim);
     ShortCutAdd s(input_dim);
     s.setF(preblock);
     if (downsample) {
-        s.setG(down_block);
+        s.setG(downsample_block);
     }
     block.add(s);
     block.emplace<ReLU>();
@@ -51,14 +51,14 @@ Sequential makeLayer(const TensorDesc& input_dim, int planes, int blocks, int st
 }
 
 void resnet() {
-
-    TensorDesc input_dim(128, 3, 224, 224);
+    // batch_size = 16 per gpu
+    TensorDesc input_dim(16, 3, 224, 224);
 
     Model m(input_dim);
 
     Sequential pre(input_dim);
     pre.emplace<ConvLayer>(64, 7, 3, 2);
-    // TODO batch norm
+    pre.emplace<BatchNorm>();
     pre.emplace<ReLU>();
     pre.emplace<MaxPool>(3, 0, 2);
     DEBUG("ResNet Pre output dims: " << pre.getOutputDesc());
@@ -73,6 +73,7 @@ void resnet() {
     m.add(makeLayer(m.getOutputDesc(), 256, layers[2], 2));
     m.add(makeLayer(m.getOutputDesc(), 512, layers[3], 2));
     m.emplace<AvgPool>(7, 0, 1);
+    // TODO: linear
 
     BenchmarkLogger::benchmark(m);
 }

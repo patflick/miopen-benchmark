@@ -296,28 +296,6 @@ struct ReLU : public Layer {
     }
 };
 
-void mm(const Tensor& A, bool transA, const Tensor& B, bool transB, Tensor& C) {
-    assert(A.h == 1 && A.w == 1);
-    assert(B.h == 1 && B.w == 1);
-    assert(C.h == 1 && C.w == 1);
-    int M = transA ? A.c : A.n;
-    int K = transA ? A.n : A.c;
-    assert(transB ? K == B.c : K == B.n);
-    int N = transB ? B.n : B.c;
-    assert(C.n == M && C.c == N); // result is MxN
-    float alpha = 1.f;
-    float beta = 0.f;
-    // TODO: leading dimension lda, ldb, ldc?
-    //int lda = transA ? M : K;
-    int lda = A.c;
-    //int ldb = transB ? K : N;
-    int ldb = B.c;
-    int ldc = N;
-    assert(A.data_size == M*K*4);
-    assert(B.data_size == K*N*4);
-    assert(C.data_size == M*N*4);
-    CHECK_MIO(miopenGemm(mio::handle(), false, transA, transB, M, N, K, &alpha, A.data, lda, B.data, ldb, &beta, C.data, ldc));
-}
 
 void mm_blas(const Tensor& A, bool transA, const Tensor& B, bool transB, Tensor& C) {
     assert(A.h == 1 && A.w == 1);
@@ -385,6 +363,96 @@ struct Linear : public Layer {
     }
 };
 
+
+struct BatchNorm : public Layer {
+    // size of internal tensors (spatial: 1C11, per activation: 1CHW)
+    miopenBatchNormMode_t bn_mode;
+    TensorDesc bn_dim;
+
+    Tensor scale;
+    Tensor dscale;
+    Tensor bias;
+    Tensor dbias;
+    double exp;
+    Tensor running_mean;
+    Tensor running_var;
+    double epsilon;
+    Tensor saved_mean; // saved mean for backward
+    Tensor saved_ivar; // saved inverse variance for backward
+
+    const Tensor* input_ref; // save reference to input for backward pass
+
+    static TensorDesc get_bn_dim(const TensorDesc& input_dim, miopenBatchNormMode_t bn_mode) {
+        TensorDesc bn(0,0,0,0);
+        CHECK_MIO(miopenDeriveBNTensorDescriptor(bn.desc, input_dim.desc, bn_mode));
+        bn.update_get();
+        return bn;
+    }
+
+    BatchNorm(const TensorDesc& input_dim, miopenBatchNormMode_t bn_mode=miopenBNSpatial, double eps = 1e-05, double momentum = 0.1)
+        : Layer(input_dim, input_dim),
+          bn_mode(bn_mode),
+          bn_dim(get_bn_dim(input_dim, bn_mode)),
+          scale(bn_dim),
+          dscale(bn_dim),
+          bias(bn_dim),
+          dbias(bn_dim),
+          exp(momentum),
+          running_mean(bn_dim),
+          running_var(bn_dim),
+          epsilon(eps),
+          saved_mean(bn_dim),
+          saved_ivar(bn_dim)
+    {
+    }
+
+    void forward(const Tensor& input, Tensor& output) {
+        float alpha = 1.f;
+        float beta = 0.f;
+        CHECK_MIO(miopenBatchNormalizationForwardTraining(mio::handle(),
+                 bn_mode,
+                 &alpha,
+                 &beta,
+                 input.desc,
+                 input.data,
+                 output.desc,
+                 output.data,
+                 bn_dim.desc,
+                 scale.data,
+                 bias.data,
+                 exp,
+                 running_mean.data,
+                 running_var.data,
+                 epsilon,
+                 saved_mean.data,
+                 saved_ivar.data));
+        input_ref = &input;
+    }
+
+    void backward(const Tensor& doutput, Tensor& dinput) {
+        float alpha = 1.f;
+        float beta = 0.f;
+        CHECK_MIO(miopenBatchNormalizationBackward(mio::handle(),
+                     bn_mode,
+                     &alpha, 
+                     &beta,
+                     &alpha,
+                     &beta,
+                     input_ref->desc,
+                     input_ref->data,
+                     doutput.desc,
+                     doutput.data,
+                     dinput.desc,
+                     dinput.data,
+                     bn_dim.desc,
+                     scale.data,
+                     dscale.data,
+                     dbias.data,
+                     epsilon,
+                     saved_mean.data,
+                     saved_ivar.data));
+    }
+};
 
 struct Reshape : public Layer {
 
