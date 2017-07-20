@@ -18,7 +18,7 @@ int main(int argc, char *argv[])
 
     // benchmark fwd
     BenchmarkLogger::new_session("wino_conv");
-    BenchmarkLogger::fwd_layer_benchmark(m, 1000);
+    BenchmarkLogger::fwd_layer_benchmark(m, 5000);
 
     return 0;
 }
