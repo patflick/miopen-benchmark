@@ -218,7 +218,7 @@ struct BenchmarkLogger : public Timer {
                 bwdtime.tic();
                 m.backward();
                 CHECK_HIP(hipDeviceSynchronize());
-                log_step(m.get_name(), false, bwdtime.toc());
+                log_step(m.get_name(), true, bwdtime.toc());
             }
         }
         double time_per = timer.toc()/reps;

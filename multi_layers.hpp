@@ -150,7 +150,7 @@ struct Sequential : public Function {
         backward_pass(dout, din, [](Function& l, const Tensor& o, Tensor& i) {
             BenchmarkLogger::instance().tic();
             l.backward(o, i);
-            BenchmarkLogger::instance().toc(l, false);
+            BenchmarkLogger::instance().toc(l, true);
         });
     }
 };
@@ -285,12 +285,20 @@ struct ShortCutAdd : public Function {
     }
 
     virtual void backward(const Tensor& dout, Tensor& din) override {
+        BenchmarkLogger::instance().tic();
         F->backward(dout, din);
+        BenchmarkLogger::instance().toc("ShortcutF", true);
         if (G.get() != nullptr) {
+            BenchmarkLogger::instance().tic();
             G->backward(dout, gdin);
+            BenchmarkLogger::instance().toc("ShortcutG", true);
+            BenchmarkLogger::instance().tic();
             add_inplace(din, gdin);
+            BenchmarkLogger::instance().toc("AddInplace", true);
         } else {
+            BenchmarkLogger::instance().tic();
             add_inplace(din, dout);
+            BenchmarkLogger::instance().toc("AddInplace", true);
         }
     }
 

@@ -400,6 +400,10 @@ struct BatchNorm : public Layer {
     {
     }
 
+    virtual std::ostream& write_name(std::ostream& os) const {
+        return os << "BatchNorm()";
+    }
+
     void forward(const Tensor& input, Tensor& output) {
         float alpha = 1.f;
         float beta = 0.f;
