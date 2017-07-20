@@ -5,9 +5,9 @@
 struct Function {
     // every layer has to implement forward and backward
     virtual void forward(const Tensor& input, Tensor& output) = 0;
-    virtual void init_forward(const Tensor& input, Tensor& output) {};
+    virtual void init_forward(const Tensor&, Tensor&) {};
     virtual void backward(const Tensor& doutput, Tensor& dinput) = 0;
-    virtual void init_backward(const Tensor& doutput, Tensor& dinput) {};
+    virtual void init_backward(const Tensor&, Tensor&) {};
 
     // return the input dimensions
     virtual const TensorDesc& getInputDesc() const = 0;
@@ -25,7 +25,7 @@ struct Function {
     }
 
     virtual std::ostream& write(std::ostream& os) const {
-        return this->write_dims(this->write_name(os) << ":");
+        return this->write_dims(this->write_name(os) << " ");
     }
 };
 

@@ -40,8 +40,32 @@ struct DevBuffer {
         }
     }
 
+    void resize(size_t new_size) {
+        free();
+        data = device_alloc(new_size);
+        size = new_size;
+    }
+
     ~DevBuffer() {
         free();
+    }
+};
+
+// static holder of a shared workspace buffer
+struct WorkSpace {
+    // always returns a device buffer at least the size given
+    // if the buffer isn't big enough, its resized 
+    static DevBuffer& get() {
+        static DevBuffer b;
+        return b;
+    }
+    static DevBuffer& get(size_t size) {
+        DevBuffer& b = WorkSpace::get();
+        if (b.size < size) {
+            DEBUG(" >>> Resizing workspace " << b.size << " -> " << size);
+            b.resize(size);
+        }
+        return b;
     }
 };
 
@@ -53,7 +77,7 @@ struct Dim {
     int w;
 
     Dim() : n(0), c(0), h(0), w(0) {}
-    Dim(int n, int c, int h, int w) : n(n), c(c), h(h), w(h) {}
+    Dim(int n, int c, int h, int w) : n(n), c(c), h(h), w(w) {}
     Dim(const Dim&) = default;
     Dim(Dim&&) = default;
     Dim& operator=(const Dim&) = default;
@@ -133,9 +157,9 @@ struct Tensor : public TensorDesc {
     //Tensor(const Tensor& o) = default;
     Tensor(Tensor&& o)
         : TensorDesc(std::move(o)),
-          owns_data(o.owns_data),
           data(o.data),
-          data_size(o.data_size)
+          data_size(o.data_size),
+          owns_data(o.owns_data)
     {
         o.data = nullptr;
         o.data_size = 0;
@@ -167,13 +191,13 @@ struct Tensor : public TensorDesc {
     void print_data() {
         std::vector<float> hostTensor = toHost();
         assert(h == 1 && w == 1); // current limitation
-        assert(hostTensor.size() == n*c);
+        assert(hostTensor.size() == (size_t)n*c);
         std::cout << "Tensor of size " << *this << ":" << std::endl << "[";
-        for (size_t i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i) {
             if (i > 0)
                 std::cout << " ";
             std::cout << "[";
-            for (size_t j = 0; j < c; ++j) {
+            for (int j = 0; j < c; ++j) {
                 std::cout << hostTensor[i*n + j];
                 if (j+1 < c)
                     std::cout << ", ";
@@ -200,29 +224,29 @@ struct Tensor : public TensorDesc {
 
     Tensor(TensorDesc&& d)
         : TensorDesc(std::move(d)),
-          owns_data(true),
-          data_size(n*(size_t)c*h*w*sizeof(float)) {
+          data_size(n*(size_t)c*h*w*sizeof(float)),
+          owns_data(true) {
         alloc();
     }
 
     Tensor(const Dim& dims)
         : TensorDesc(dims),
-          owns_data(true),
-          data_size(n*(size_t)c*h*w*sizeof(float)) {
+          data_size(n*(size_t)c*h*w*sizeof(float)),
+          owns_data(true) {
         alloc();
     }
 
     Tensor(int n, int c, int h, int w)
         : TensorDesc(n, c, h, w),
-          owns_data(true),
-          data_size(n*(size_t)c*h*w*sizeof(float)) {
+          data_size(n*(size_t)c*h*w*sizeof(float)),
+          owns_data(true) {
         alloc();
     }
 
     Tensor(int n, int c, int h, int w, bool do_alloc)
         : TensorDesc(n, c, h, w),
-          owns_data(do_alloc),
-          data_size(n*(size_t)c*h*w*sizeof(float)) {
+          data_size(n*(size_t)c*h*w*sizeof(float)),
+          owns_data(do_alloc) {
         if (do_alloc) {
             alloc();
         }

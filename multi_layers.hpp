@@ -9,13 +9,23 @@
 #include <memory>
 
 struct Sequential : public Function {
+    std::string name;
     TensorDesc input_desc;
     std::vector<std::shared_ptr<Function>> layers;
     std::vector<std::shared_ptr<Tensor>> out_tensors; // the inner buffers
 
-    Sequential(const TensorDesc& input_dim) : input_desc(input_dim) {}
+    Sequential(const TensorDesc& input_dim, const std::string& name) : name(name), input_desc(input_dim) {}
+    Sequential(const TensorDesc& input_dim) : Sequential(input_dim, "Sequential") {}
     Sequential(const Sequential&) = default;
     Sequential(Sequential&&) = default;
+
+    virtual std::ostream& write_name(std::ostream& os) const {
+        return os << name;
+    }
+
+    std::string get_name() const {
+        return this->name;
+    }
 
     const TensorDesc& last_output_dim() const {
         if (layers.empty()) {
@@ -153,9 +163,7 @@ struct Model : public Sequential {
     bool is_init_fwd;
     bool is_init_bwd;
 
-    std::string name;
-
-    Model(const TensorDesc& input_dim, const std::string& name) : Sequential(input_dim), input(input_dim), is_init_fwd(false), is_init_bwd(false), name(name) {}
+    Model(const TensorDesc& input_dim, const std::string& name) : Sequential(input_dim, name), input(input_dim), is_init_fwd(false), is_init_bwd(false) {}
     Model(const TensorDesc& input_dim) : Model(input_dim, "Model") {}
     Model(const Model&) = default;
     Model(Model&&) = default;
@@ -164,10 +172,6 @@ struct Model : public Sequential {
     using Sequential::init_backward;
     using Sequential::forward;
     using Sequential::backward;
-
-    std::string get_name() const {
-        return name;
-    }
 
     void init_forward() {
         if (output.data_size == 0)
@@ -200,8 +204,7 @@ struct Model : public Sequential {
 };
 
 
-
-// impleents x += y
+// implements x += y
 void add_inplace(Tensor& x, const Tensor& y) {
     float alpha1 = 1.f, alpha2 = 1.f, beta = 0.f;
     miopenOpTensor(mio::handle(), miopenTensorOpAdd, &alpha1, x.desc, x.data, &alpha2, y.desc, y.data, &beta, x.desc, x.data);
@@ -230,6 +233,10 @@ struct ShortCutAdd : public Function {
     ShortCutAdd(const ShortCutAdd&) = default;
     ShortCutAdd(ShortCutAdd&&) = default;
 
+    virtual std::ostream& write_name(std::ostream& os) const {
+        return os << "ShortCut";
+    }
+
     template <typename Func>
     void setF(Func f) {
         F = std::shared_ptr<Function>(new typename std::remove_reference<Func>::type(std::forward<Func>(f)));
@@ -253,12 +260,20 @@ struct ShortCutAdd : public Function {
 
     virtual void forward(const Tensor& in, Tensor& out) override {
         assert(F.get() != nullptr);
+        BenchmarkLogger::instance().tic();
         F->forward(in, out);
+        BenchmarkLogger::instance().toc("ShortcutF", false);
         if (G.get() != nullptr) {
+            BenchmarkLogger::instance().tic();
             G->forward(in, gout);
+            BenchmarkLogger::instance().toc("ShortcutG", false);
+            BenchmarkLogger::instance().tic();
             add_inplace(out, gout);
+            BenchmarkLogger::instance().toc("AddInplace", false);
         } else {
+            BenchmarkLogger::instance().tic();
             add_inplace(out, in);
+            BenchmarkLogger::instance().toc("AddInplace", false);
         }
     }
 

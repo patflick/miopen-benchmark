@@ -144,6 +144,12 @@ struct BenchmarkLogger : public Timer {
         log_step(ss.str(), bwd, dur);
     }
 
+    void toc(const std::string& s, bool bwd) {
+        CHECK_HIP(hipDeviceSynchronize());
+        float dur = this->toc();
+        log_step(s, bwd, dur);
+    }
+
     template <typename M>
     static void benchmark(M& m, int reps = 10, bool runbwd = true) {
         instance().do_benchmark(m, reps, runbwd);

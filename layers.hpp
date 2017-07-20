@@ -54,8 +54,6 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     Tensor dweights;
     const Tensor* input_ref;
 
-    DevBuffer buffer; // TODO: joined buffer for fwd/bwd
-
     // algorithm selection:
     miopenConvFwdAlgorithm_t fwd_algo;
     miopenConvBwdWeightsAlgorithm_t bwd_weights_algo;
@@ -63,7 +61,8 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
 
 
     virtual std::ostream& write_name(std::ostream& os) const {
-        return os << "Conv(" << kernel_size << "x" << kernel_size << ")";
+        //return os << "Conv(" << kernel_size << "x" << kernel_size << ")";
+        return os << "Conv(" << kernel_size << "x" << kernel_size << ",pad=" << padding << ",s=" << stride << ")";
     }
 
     ConvLayer(const TensorDesc& input_dims, int channels_out, int kernel_size, int padding, int stride)
@@ -93,19 +92,16 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     }
 
     void init_forward(const Tensor& input, Tensor& output) override {
-        DEBUG("init conv " << *this);
-        size_t workspace_size;
-        CHECK_MIO(miopenConvolutionForwardGetWorkSpaceSize(mio::handle(), weights.desc, input.desc, this->desc, output.desc, &workspace_size));
+        size_t fwd_workspace_size;
+        CHECK_MIO(miopenConvolutionForwardGetWorkSpaceSize(mio::handle(), weights.desc, input.desc, this->desc, output.desc, &fwd_workspace_size));
+        DEBUG("Init fwd " << *this << " req workspace: " << fwd_workspace_size);
 
-        //std::cout << "\tWorkspace size required for fwd: " << workspace_size << std::endl;
-        if (workspace_size > buffer.size) {
-            buffer = DevBuffer(workspace_size);
-        }
+        DevBuffer& buffer = WorkSpace::get(fwd_workspace_size);
 
         // find best algo, and benchmark!
         miopenConvAlgoPerf_t perfs[4];
         int returned_algos;
-        CHECK_MIO(miopenFindConvolutionForwardAlgorithm(mio::handle(), input.desc, input.data, weights.desc, weights.data, this->desc, output.desc, output.data, 4, &returned_algos, perfs, buffer.data, buffer.size, false));
+        CHECK_MIO(miopenFindConvolutionForwardAlgorithm(mio::handle(), input.desc, input.data, weights.desc, weights.data, this->desc, output.desc, output.data, 4, &returned_algos, perfs, buffer.data, fwd_workspace_size, false));
 
         INFO("\tMIOpen Found " << returned_algos << " fwd algorithms, choosing " << perfs[0].fwd_algo << ": ");
         for (int i = 0; i < returned_algos; ++i) {
@@ -116,18 +112,16 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     }
 
     void find_bwd_data_algo(const Tensor& doutput, Tensor& dinput) {
-        size_t workspace_size;
-        CHECK_MIO(miopenConvolutionBackwardDataGetWorkSpaceSize(mio::handle(), doutput.desc, weights.desc, this->desc, dinput.desc, &workspace_size));
+        size_t bwd_data_workspace_size;
+        CHECK_MIO(miopenConvolutionBackwardDataGetWorkSpaceSize(mio::handle(), doutput.desc, weights.desc, this->desc, dinput.desc, &bwd_data_workspace_size));
+        DEBUG("Init bwd_data " << *this << " req workspace: " << bwd_data_workspace_size);
 
-        //std::cout << "\tWorkspace size required for bwd_data: " << workspace_size << std::endl;
-        if (workspace_size > buffer.size) {
-            buffer = DevBuffer(workspace_size);
-        }
+        DevBuffer& buffer = WorkSpace::get(bwd_data_workspace_size);
 
         // find best algo, and benchmark!
         miopenConvAlgoPerf_t perfs[5];
         int returned_algos;
-        CHECK_MIO(miopenFindConvolutionBackwardDataAlgorithm(mio::handle(), doutput.desc, doutput.data, weights.desc, weights.data, this->desc, dinput.desc, dinput.data, 5, &returned_algos, perfs, buffer.data, buffer.size, false));
+        CHECK_MIO(miopenFindConvolutionBackwardDataAlgorithm(mio::handle(), doutput.desc, doutput.data, weights.desc, weights.data, this->desc, dinput.desc, dinput.data, 5, &returned_algos, perfs, buffer.data, bwd_data_workspace_size, false));
 
         INFO("\tMIOpen Found " << returned_algos << " bwd_data algorithms, choosing " << perfs[0].fwd_algo << ": ");
         for (int i = 0; i < returned_algos; ++i) {
@@ -138,18 +132,16 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     }
 
     void find_bwd_weights_algo(const Tensor& doutput, Tensor& input) {
-        size_t workspace_size;
-        CHECK_MIO(miopenConvolutionBackwardWeightsGetWorkSpaceSize(mio::handle(), doutput.desc, input.desc, this->desc, weights.desc, &workspace_size));
+        size_t bwd_weights_workspace_size;
+        CHECK_MIO(miopenConvolutionBackwardWeightsGetWorkSpaceSize(mio::handle(), doutput.desc, input.desc, this->desc, weights.desc, &bwd_weights_workspace_size));
+        DEBUG("Init bwd_weights " << *this << " req workspace: " << bwd_weights_workspace_size);
 
-        //std::cout << "\tWorkspace size required for bwd_weights: " << workspace_size << std::endl;
-        if (workspace_size > buffer.size) {
-            buffer = DevBuffer(workspace_size);
-        }
+        DevBuffer& buffer = WorkSpace::get(bwd_weights_workspace_size);
 
         // find best algo, and benchmark!
         miopenConvAlgoPerf_t perfs[5];
         int returned_algos;
-        CHECK_MIO(miopenFindConvolutionBackwardWeightsAlgorithm(mio::handle(), doutput.desc, doutput.data, input.desc, input.data, this->desc, dweights.desc, dweights.data, 5, &returned_algos, perfs, buffer.data, buffer.size, false));
+        CHECK_MIO(miopenFindConvolutionBackwardWeightsAlgorithm(mio::handle(), doutput.desc, doutput.data, input.desc, input.data, this->desc, dweights.desc, dweights.data, 5, &returned_algos, perfs, buffer.data, bwd_weights_workspace_size, false));
 
         INFO("\tMIOpen Found " << returned_algos << " bwd_weights algorithms, choosing " << perfs[0].fwd_algo << ": ");
         for (int i = 0; i < returned_algos; ++i) {
@@ -167,6 +159,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     void forward(const Tensor& input, Tensor& output) override {
         float alpha = 1.f;
         float beta = 0.f;
+        DevBuffer& buffer = WorkSpace::get();
         CHECK_MIO(miopenConvolutionForward(mio::handle(), &alpha, input.desc, input.data, weights.desc, weights.data, this->desc, fwd_algo, &beta, output.desc, output.data, buffer.data, buffer.size));
         // save for backward
         input_ref = &input;
@@ -175,6 +168,7 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
     void backward(const Tensor& doutput, Tensor& dinput) override {
         float alpha = 1.f;
         float beta = 0.f;
+        DevBuffer& buffer = WorkSpace::get();
         CHECK_MIO(miopenConvolutionBackwardData(mio::handle(), &alpha, doutput.desc, doutput.data, weights.desc, weights.data, this->desc, bwd_data_algo, &beta, dinput.desc, dinput.data, buffer.data, buffer.size));
         CHECK_MIO(miopenConvolutionBackwardWeights(mio::handle(), &alpha, doutput.desc, doutput.data, input_ref->desc, input_ref->data, this->desc, bwd_weights_algo, &beta, dweights.desc, dweights.data, buffer.data, buffer.size));
     }
@@ -224,7 +218,7 @@ struct PoolingLayer : public Layer {
         CHECK_MIO(miopenDestroyPoolingDescriptor(desc));
     }
 
-    virtual void init_forward(const Tensor& input, Tensor& output) override {
+    virtual void init_forward(const Tensor&, Tensor&) override {
         size_t size;
         CHECK_MIO(miopenPoolingGetWorkSpaceSize(output_desc.desc, &size));
         indeces_buf = DevBuffer(size);
@@ -462,21 +456,20 @@ struct Reshape : public Layer {
         assert(input_dim.c * input_dim.h * input_dim.w == c*h*w);
     }
 
-
     void init_forward(const Tensor& input, Tensor& output) override {
-        output = std::move(input.viewAs(getOutputDesc()));
+        output = input.viewAs(getOutputDesc());
     }
 
     void forward(const Tensor& input, Tensor& output) override {
-        output = std::move(input.viewAs(getOutputDesc()));
+        output = input.viewAs(getOutputDesc());
     }
 
     void init_backward(const Tensor& doutput, Tensor& dinput) override {
-        dinput = std::move(doutput.viewAs(getInputDesc()));
+        dinput = doutput.viewAs(getInputDesc());
     }
 
     void backward(const Tensor& doutput, Tensor& dinput) override {
-        dinput = std::move(doutput.viewAs(getInputDesc()));
+        dinput = doutput.viewAs(getInputDesc());
     }
 };
 

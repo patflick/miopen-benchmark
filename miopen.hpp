@@ -183,7 +183,7 @@ struct Device {
                         std::string pciids = split(line, '=')[1];
                         std::vector<std::string> ids = split(pciids, ':');
                         //std::string busid = "0x" + ids[1];
-                        unsigned int pci_busid = std::stoul("0x" + ids[1], nullptr, 16);
+                        int pci_busid = std::stoul("0x" + ids[1], nullptr, 16);
                         if (pci_busid == hip_props.pciBusID) {
                             drm_path = carddir;
                             // find hwmon path

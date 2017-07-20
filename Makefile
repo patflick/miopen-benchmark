@@ -5,7 +5,7 @@ INCLUDE_DIRS=-I$(HIP_PATH)/include -I$(ROCM_PATH)/include
 LD_FLAGS=-L$(ROCM_PATH)/lib -L$(ROCM_PATH)/opencl/lib/x86_64 -lMIOpen -lOpenCL -lmiopengemm -lhipblas-hcc -lrocblas-hcc
 TARGET=--amdgpu-target=gfx900
 
-HIPCC_FLAGS=-g $(CXXFLAGS) $(TARGET) $(INCLUDE_DIRS)
+HIPCC_FLAGS=-g -Wall $(CXXFLAGS) $(TARGET) $(INCLUDE_DIRS)
 
 all: alexnet resnet benchmark_wino layerwise gputop
 
