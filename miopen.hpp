@@ -2,7 +2,7 @@
 #define MY_MIOPEN_HPP
 
 #include <miopen/miopen.h>
-#include <hipblas.h>
+#include <hipblas/hipblas.h>
 //#include <gperftools/profiler.h>
 
 #include <iostream>
