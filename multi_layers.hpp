@@ -1,6 +1,8 @@
 #ifndef MULTI_LAYERS_HPP
 #define MULTI_LAYERS_HPP
 
+#include <hip/hip_runtime.h>
+
 #include "tensor.hpp"
 #include "function.hpp"
 #include "utils.hpp"
@@ -205,9 +207,27 @@ struct Model : public Sequential {
 
 
 // implements x += y
+/*
 void add_inplace(Tensor& x, const Tensor& y) {
     float alpha1 = 1.f, alpha2 = 1.f, beta = 0.f;
     miopenOpTensor(mio::handle(), miopenTensorOpAdd, &alpha1, x.desc, x.data, &alpha2, y.desc, y.data, &beta, x.desc, x.data);
+}
+*/
+
+__global__ void addinplace_kernel(hipLaunchParm lp, float* x, const float* y, size_t N) {
+    size_t offset = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+    size_t stride = hipBlockDim_x * hipGridDim_x;
+
+    for (size_t i = offset; i < N; i+= stride) {
+        x[i] = x[i] + y[i];
+    }
+}
+
+void add_inplace(Tensor& x, const Tensor& y) {
+    unsigned int blocks = 512;
+    unsigned int threadsPerBlock = 256;
+    assert(x.data_size == y.data_size);
+    hipLaunchKernel(addinplace_kernel, dim3(blocks), dim3(threadsPerBlock), 0, 0, (float*)x.data, (float*)y.data, x.data_size/4);
 }
 
 struct ShortCutAdd : public Function {

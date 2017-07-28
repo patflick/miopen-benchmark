@@ -38,7 +38,7 @@ void alexNet() {
     /* classifier */
     Sequential classifier(features.getOutputDesc());
     // TODO Dropout
-    classifier.reshape(128, 256 * 6 * 6, 1, 1);
+    classifier.reshape(input_dim.n, 256 * 6 * 6, 1, 1);
     classifier.addLinear(4096);
     classifier.addReLU();
     // TODO: Dropout
@@ -51,7 +51,7 @@ void alexNet() {
     m.add(classifier);
 
     BenchmarkLogger::new_session("alex_net");
-    BenchmarkLogger::benchmark(m);
+    BenchmarkLogger::benchmark(m, 50);
 }
 
 

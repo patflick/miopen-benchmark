@@ -137,11 +137,13 @@ struct BenchmarkLogger : public Timer {
 
     using Timer::toc;
     void toc(Function& f, bool bwd) {
+#if LAYER_TIMING == 1
         CHECK_HIP(hipDeviceSynchronize());
         float dur = this->toc();
         std::stringstream ss;
         ss << f;
         log_step(ss.str(), bwd, dur);
+#endif
     }
 
     void toc(const std::string& s, bool bwd) {

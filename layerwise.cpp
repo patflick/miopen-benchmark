@@ -25,7 +25,7 @@ void benchmark_convlayers() {
 
 
     int layer = 5;
-    int reps = 10;
+    int reps = 50;
     BenchmarkLogger::new_session("conv_layers");
     for (ConvLayerDesc& l : runs) {
         std::stringstream ss;

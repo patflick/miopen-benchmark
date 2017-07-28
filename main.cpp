@@ -29,6 +29,7 @@ int main(int argc, char *argv[])
     // enable profiling
     CHECK_MIO(miopenEnableProfiling(mio::handle(), true));
 
+    /*
     TensorDesc input(32, 3, 8, 8);
     Model m(input);
     m.emplace<BatchNorm>();
@@ -37,6 +38,8 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 10; ++i) {
         m.forward();
     }
+    */
+    check_add();
 
     miopenDestroy(mio::handle());
     return 0;
