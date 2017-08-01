@@ -15,7 +15,11 @@ all: alexnet resnet benchmark_wino layerwise gputop
 HEADERS=function.hpp layers.hpp miopen.hpp multi_layers.hpp tensor.hpp utils.hpp
 
 benchmark: all
-	./benchmark_wino | tee wino.log && ./layerwise | tee layerwise.log && ./alexnet | tee alexnet.log && ./resnet | tee resnet50.log
+	./benchmark_wino W1 1000 | tee W1.log \
+	&& ./benchmark_wino L2 10000 | tee L2.log \
+	&& ./layerwise | tee layerwise.log \
+	&& ./alexnet | tee alexnet.log \
+	&& ./resnet | tee resnet50.log
 
 alexnet: alexnet.cpp $(HEADERS)
 	$(HIPCC) $(HIPCC_FLAGS) alexnet.cpp $(LD_FLAGS) -o $@
