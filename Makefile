@@ -40,4 +40,4 @@ layerwise: layerwise.cpp $(HEADERS)
 	$(HIPCC) $(HIPCC_FLAGS) layerwise.cpp $(LD_FLAGS) -o $@
 
 clean:
-	rm -f *.o *.out benchmark segfault alexnet resnet benchmark_wino layerwise gputop
+	rm -f *.o *.out benchmark segfault alexnet resnet benchmark_wino layerwise gputop main
