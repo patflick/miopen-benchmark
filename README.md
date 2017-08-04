@@ -13,7 +13,14 @@
 - `summarize.sql`: summarize layer-wise `.tsv` benchmarking logs to find the most time consuming layers
 
 
-#### Building:
+### Building:
 ```
 make
 ```
+
+### Running all benchmarks
+```
+make benchmark
+```
+Take a look into the `Makefile` or `.cpp` sources for more details.
+
