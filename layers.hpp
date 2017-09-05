@@ -272,11 +272,8 @@ struct ReLU : public Layer {
     }
 
     void forward(const Tensor& input, Tensor& output) {
-        /*
         float alpha = 1.f;
         float beta = 0.f;
-        */
-        int alpha = 1, beta = 1;
         CHECK_MIO(miopenActivationForward(mio::handle(), desc, &alpha, input.desc, input.data, &beta, output.desc, output.data));
         // save for backward
         this->input_ref = &input;
