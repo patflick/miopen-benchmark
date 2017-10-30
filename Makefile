@@ -2,7 +2,7 @@ ROCM_PATH?= $(wildcard /opt/rocm)
 HIP_PATH?= $(wildcard /opt/rocm/hip)
 HIPCC=$(HIP_PATH)/bin/hipcc
 INCLUDE_DIRS=-I$(HIP_PATH)/include -I$(ROCM_PATH)/include -I$(ROCM_PATH)/hipblas/include
-LD_FLAGS=-L$(ROCM_PATH)/lib -L$(ROCM_PATH)/opencl/lib/x86_64 -lMIOpen -lOpenCL -lmiopengemm -lhipblas-hcc -lrocblas-hcc
+LD_FLAGS=-L$(ROCM_PATH)/lib -L$(ROCM_PATH)/opencl/lib/x86_64 -lMIOpen -lOpenCL -lmiopengemm -lhipblas -lrocblas
 TARGET=--amdgpu-target=gfx900
 LAYER_TIMING=1
 
