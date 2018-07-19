@@ -109,6 +109,9 @@ struct ConvLayer : public ConvDesc, public ConvLayerDesc, public Layer {
         }
 
         fwd_algo = perfs[0].fwd_algo;
+        
+        // randomly initialize weights
+        this->weights.uniform();
     }
 
     void find_bwd_data_algo(const Tensor& doutput, Tensor& dinput) {
@@ -337,7 +340,12 @@ struct Linear : public Layer {
           dweights(out_size, in_size, 1, 1)
     {
     }
-
+    
+    void init_forward(const Tensor& input, Tensor& output) override {
+        // randomly initialize weights
+        this->weights.uniform();
+    }
+    
     void forward(const Tensor& input, Tensor& output) {
         assert(batch_size == input.n);
         assert(batch_size == output.n);
