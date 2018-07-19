@@ -130,6 +130,7 @@ int main(int argc, char *argv[])
 
     std::string mname = "resnet50";
     Model m = resnet(mname);
+    m.input.uniform(); // randomly initialize input tensor prior to benchmark
     BenchmarkLogger::new_session(mname);
     BenchmarkLogger::benchmark(m, 20);
 }
