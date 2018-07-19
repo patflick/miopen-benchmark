@@ -5,15 +5,7 @@
 #include "multi_layers.hpp"
 
 
-/* TODO:
- * - [ ] create AlexNet class
- * - [ ] uniform random tensors (via host->device copy), and CPU initialized tensors
- * - [x] Make `Model` take input and output tensors in forward(), backward()
- * - [ ] Collect total and average times per layer
- * - [ ] implement and benchmark ResNet
- */
-
-
+// implemenets AlexNet
 void alexNet() {
     TensorDesc input_dim(128, 3, 224, 224);
 
@@ -49,6 +41,7 @@ void alexNet() {
     Model m(input_dim);
     m.add(features);
     m.add(classifier);
+    m.input.uniform(); // randomly initialize input
 
     BenchmarkLogger::new_session("alex_net");
     BenchmarkLogger::benchmark(m, 50);
