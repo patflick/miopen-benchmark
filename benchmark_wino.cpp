@@ -45,6 +45,7 @@ int main(int argc, char *argv[])
     TensorDesc input_dim(l.batch_size, l.channels_in, l.height, l.width);
     Model m(input_dim);
     m.emplace<ConvLayer>(l.channels_out, l.kernel_size, l.padding, l.stride);
+    m.input.uniform(); // randomly initialize input
 
     // benchmark model forward
     BenchmarkLogger::new_session(layer_name);
