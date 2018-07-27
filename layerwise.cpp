@@ -34,6 +34,7 @@ void benchmark_convlayers() {
         Model m(input_dim, ss.str());
         m.emplace<ConvLayer>(l.channels_out, l.kernel_size, l.padding, l.stride);
 
+        m.input.uniform(); // randomly initialize input
         BenchmarkLogger::benchmark(m, reps);
 
         --layer;
