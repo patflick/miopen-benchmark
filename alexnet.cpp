@@ -5,7 +5,7 @@
 #include "multi_layers.hpp"
 
 
-// implemenets AlexNet
+// implements AlexNet
 void alexNet() {
     TensorDesc input_dim(128, 3, 224, 224);
 
