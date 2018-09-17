@@ -172,7 +172,8 @@ struct Device {
     /// The paths are found using hiDeviceProp_t::pciBusID
     void init_sys_paths() {
         bool found = false;
-        for (std::string cardname : ls_dir("/sys/class/drm", std::regex("card\\d+"))) {
+        std::regex card_re("card\\d+");
+        for (std::string cardname : ls_dir("/sys/class/drm", card_re)) {
             std::string carddir = "/sys/class/drm/" + cardname;
             std::string fname = carddir + "/device/uevent";
             std::ifstream f(fname);
