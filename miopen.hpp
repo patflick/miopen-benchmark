@@ -10,7 +10,7 @@
 #include <string>
 #include <sstream>
 #include <vector>
-#include <regex>
+#include <algorithm>
 #include <dirent.h>
 
 //#define WITH_CL
@@ -128,7 +128,17 @@ std::vector<std::string> ls_dir(const std::string& dname) {
     return files;
 }
 
-std::vector<std::string> ls_dir(const std::string& dname, const std::regex& match) {
+static bool is_valid_device(const std::string device_name, const std::string & device_prefix){
+    // accept device name like "card0", "card1", ...
+    std::size_t pos = device_name.find(device_prefix);
+    if(pos == 0){
+        std::string digit = device_name.substr(device_prefix.length());
+        return !digit.empty() && std::all_of(digit.begin(), digit.end(), ::isdigit);
+    }
+    return false;
+}
+
+std::vector<std::string> ls_dir(const std::string& dname, const std::string& device_prefix) {
     std::vector<std::string> files;
     struct dirent* entry;
     DIR *dir = opendir(dname.c_str());
@@ -138,10 +148,8 @@ std::vector<std::string> ls_dir(const std::string& dname, const std::regex& matc
 
     while ((entry = readdir(dir)) != NULL) {
         std::string fname(entry->d_name);
-        if (fname != "." && fname != "..") {
-            if (std::regex_match(fname, match)) {
-                files.push_back(fname);
-            }
+        if(is_valid_device(fname, device_prefix)){
+            files.push_back(fname);
         }
     }
     return files;
@@ -172,8 +180,7 @@ struct Device {
     /// The paths are found using hiDeviceProp_t::pciBusID
     void init_sys_paths() {
         bool found = false;
-        std::regex card_re("card\\d+");
-        for (std::string cardname : ls_dir("/sys/class/drm", card_re)) {
+        for (std::string cardname : ls_dir("/sys/class/drm", "card")) {
             std::string carddir = "/sys/class/drm/" + cardname;
             std::string fname = carddir + "/device/uevent";
             std::ifstream f(fname);
@@ -188,7 +195,7 @@ struct Device {
                         if (pci_busid == hip_props.pciBusID) {
                             drm_path = carddir;
                             // find hwmon path
-                            std::vector<std::string> hwpaths = ls_dir(drm_path + "/device/hwmon", std::regex("hwmon\\d+"));
+                            std::vector<std::string> hwpaths = ls_dir(drm_path + "/device/hwmon", "hwmon");
                             if (hwpaths.size() != 1) {
                                 WARNING("No or multiple hwmon paths for " << drm_path);
                             }
